@@ -121,6 +121,15 @@ android {
         }
     }
 
+    // ownroot: постоянный debug-ключ в репо — у CI-ранов был случайный debug.keystore,
+    // подписи соседних билдов не совпадали → INSTALL_FAILED_UPDATE_INCOMPATIBLE
+    signingConfigs.getByName("debug") {
+        storeFile = rootProject.file("ownroot.keystore")
+        storePassword = "ownrootroot"
+        keyAlias = "ownroot"
+        keyPassword = "ownrootroot"
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
