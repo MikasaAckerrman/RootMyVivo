@@ -1,0 +1,343 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Strings for the Compose manager.
+  These are new keys, kept separate from the legacy :app string set while both modules
+  exist. When :app is retired, app/src/main/res/values*/strings.xml moves here and
+  crowdin.yml is repointed so the ~40 existing translations carry over rather than
+  being rewritten. Nothing user-visible may be hard-coded in a composable.
+-->
+<resources>
+    <!-- Navigation -->
+    <string name="nav_rootflow">Unlock Root</string>
+    <string name="nav_logs">Logs</string>
+    <string name="nav_modules">Modules</string>
+    <string name="nav_settings">Settings</string>
+    <string name="nav_about">About</string>
+    <!-- Rearranging the panels, and the ball that can stand in for the bar -->
+    <string name="panels_done">Done</string>
+    <!-- Example: "Hide Store". The name is one of the four panels above. -->
+    <string name="panels_hide">Hide %1$s</string>
+    <string name="panels_show">Show %1$s</string>
+    <!-- Spoken actions while rearranging: a drag cannot be made with touch exploration on -->
+    <string name="panels_move_earlier">Move earlier</string>
+    <string name="panels_move_later">Move later</string>
+    <string name="panels_ball_open">Open navigation</string>
+    <string name="panels_ball_close">Close navigation</string>
+    <!-- Framework status -->
+    <string name="status_active">Active</string>
+    <string name="status_degraded">Needs attention</string>
+    <string name="status_inactive">Not activated</string>
+    <!-- The framework is running but speaks a different generation of the manager interface. -->
+    <string name="status_mismatched">Version mismatch</string>
+    <string name="status_checking">Checking…</string>
+    <!-- Degraded causes, in the priority order the daemon reports them -->
+    <!-- Shown for "Where" when no frame in the trace belongs to Vector's own code. -->
+    <!-- %1$s is a timestamp, %2$s a thread name, e.g. "2026-07-29 11:42:03 +0200 on main". -->
+    <!-- The frames printStackTrace replaced with "... N more" because it had printed them already. -->    <!-- System status detail -->
+    <!-- Home: the community feed -->
+    <!-- Example: "7 commits by 4 people" -->    <!-- Joins a commit's author with its co-authors, e.g. "Leaf-lsgtky &amp; Qing" -->
+    <!-- The rail's "you are here" marker -->
+    <!-- Home appearance sheet. Settings live beside what they change, not in one heap. -->
+    <string name="appearance_title">Appearance</string>
+    <!-- Modules -->    
+    <!-- Built-in web viewer -->
+    <string name="web_open_external">Open in browser</string>
+    <!-- The status header's living surface -->
+    <!-- Settings: where the panels live. Nothing on Android teaches a long press on a bar. -->
+    <string name="settings_navigation">Navigation</string>
+    <string name="settings_floating_nav">Floating navigation</string>
+    <string name="settings_floating_nav_summary">Replaces the bar with a small ball you can drag anywhere. Hold it to fan the panels out, or tap it to keep them open.</string>
+    <string name="settings_rearrange_panels">Rearrange panels</string>
+    <string name="settings_rearrange_panels_summary">Change their order, or hide the ones you never open.</string>
+    <!-- Settings: activity feed -->    <!-- Scope editor -->
+    <!-- e.g. "3 to add, 1 to remove" -->
+    <!-- Long-press actions on a package -->
+    <!-- Generic -->
+    <string name="back">Back</string>
+    <string name="app_name" translatable="false">ownroot</string>    <!-- Canary builds: choosing which nightly to test, and why it is worth an evening -->
+    <!-- %1$d is how many canaries CI keeps -->    <!-- Heads the list of issues closed since the reader's build -->    <!-- Same version number as the newest canary, but built from a different commit -->
+    <!-- On a release published after the last canary — normal for a day or two after a release -->
+    <!-- The build number, shown in monospace: "canary 3049" -->
+    <string name="language_title">Language</string>
+    <!-- Getting back into Vector, which parasitically has no launcher icon of its own -->
+<!-- RootMyS24 custom UI -->
+    <string name="settings_screen_title">Settings</string>
+    <string name="settings_screen_subtitle">Run preferences &amp; about</string>
+    <string name="settings_section_run">Run</string>
+    <string name="settings_auto_screen_off">Auto screen off</string>
+    <string name="settings_auto_screen_off_summary">Turns the screen off during the run to reduce kernel race probability</string>
+    <string name="settings_brief_log">Brief log mode</string>
+    <string name="settings_brief_log_summary">Show only summary lines in the run log to reduce clutter</string>
+    <string name="settings_auto_save_log">Auto-save log</string>
+    <string name="settings_auto_save_log_summary">Persist run logs to disk so they survive a crash or reboot (debug option)</string>
+    <string name="settings_adb_wireless">Wireless debugging auth</string>
+    <string name="settings_adb_wireless_summary">Experimental. When enabled, the home screen shows wireless debugging controls (pairing / connect)</string>
+    <string name="settings_untested_payloads">Untested payloads</string>
+    <string name="settings_untested_payloads_summary">Show payloads ported from RootMyGalaxy that have not been verified on this app. Use at your own risk.</string>
+    <string name="settings_section_about">About</string>
+    <string name="settings_check_update">Check for updates</string>
+    <string name="settings_check_update_summary">Open GitHub Releases for new versions</string>
+    <string name="settings_project_home">Project home</string>
+    <string name="settings_project_home_summary">Source, issues and usage notes</string>
+    <string name="settings_version">Version v%1$s (%2$d)</string>
+    <string name="rootflow_detail_fallback">S24 series unlock root · no flashing, no KNOX trip</string>
+    <string name="rootflow_firmware_label">System version</string>
+    <string name="rootflow_firmware_range">Firmware range: %1$s</string>
+    <string name="rootflow_firmware_device">Supported devices: %1$s</string>
+    <string name="rootflow_firmware_hint">Payload: %1$s</string>
+    <string name="rootflow_firmware_change">Change</string>
+    <string name="rootflow_firmware_pending">Pending</string>
+    <string name="rootflow_firmware_search_hint">Search device/version/firmware</string>
+    <string name="rootflow_firmware_filter_all">All</string>
+    <string name="rootflow_firmware_no_match">No matching firmware found</string>
+    <string name="rootflow_firmware_tested">tested</string>
+    <string name="rootflow_start">Start Root</string>
+    <string name="rootflow_running">Running...</string>
+    <string name="rootflow_done">root complete</string>
+    <string name="rootflow_screen_off_hint">Keep the screen off during the run for best results.</string>
+    <string name="rootflow_auth_label">Authorization method</string>
+    <string name="rootflow_auth_shizuku">Shizuku (install Shizuku app)</string>
+    <string name="rootflow_auth_adb">Wireless debugging (no extra app)</string>
+    <string name="rootflow_auth_adb_hint">Enable Wireless debugging in Developer options, then pair with the code shown, or connect using the IP:port shown (39xxx connect port).</string>
+    <string name="rootflow_auth_adb_host">IP</string>
+    <string name="rootflow_auth_adb_port">Port</string>
+    <string name="rootflow_auth_adb_connect">Connect</string>
+    <string name="rootflow_auth_adb_connected">Connected ✓</string>
+    <string name="rootflow_auth_adb_disconnect">Disconnect</string>
+    <string name="rootflow_auth_adb_pair">Pair with code</string>
+    <string name="rootflow_auth_adb_pair_port">Pair port</string>
+    <string name="rootflow_auth_adb_pair_code">6-digit pair code</string>
+    <string name="rootflow_auth_adb_pairing">Pairing…</string>
+    <string name="rootflow_auth_adb_paired">Paired ✓ — now tap Connect</string>
+    <string name="rootflow_auth_adb_pair_notify">Notify pairing</string>
+    <string name="rootflow_auth_adb_pair_notify_hint">Finds this device via mDNS and asks for the 6-digit code in a notification — no need to type the IP or ports.</string>
+    <string name="adb_wireless_bad_host">Enter the device IP address</string>
+    <string name="adb_wireless_bad_port">Port must be a number</string>
+    <string name="adb_wireless_bad_pair_code">Enter the 6-digit pairing code</string>
+    <string name="adb_wireless_connected">Wireless debugging connected: %1$s:%2$d</string>
+    <string name="log_adb_not_connected">Wireless debugging not connected. Connect it in the authorization card first.</string>
+    <string name="log_adb_ready">Wireless debugging ready</string>
+    <string name="log_adb_pair_code_wrong">Pairing failed: wrong pairing code or code expired</string>
+    <string name="log_adb_pair_failed">Pairing failed: %1$s</string>
+    <string name="log_adb_pair_notify_started">Pairing notification sent — check the notification and enter the 6-digit code</string>
+    <string name="notification_channel_adb_pairing">Wireless debugging pairing</string>
+    <string name="notification_channel_root_success">Root success</string>
+    <string name="notification_root_success_title">Root complete!</string>
+    <string name="notification_root_success_text">Root ready. This app is the manager: modules are managed right here</string>
+    <string name="log_notification_no_permission">Notification permission not granted — enable it in system settings to get the success alert</string>
+    <string name="notification_adb_pairing_searching_title">Looking for wireless debugging service</string>
+    <string name="notification_adb_pairing_searching_text">1. Open Developer options → Wireless debugging 2. Tap “Pair device with pairing code” 3. Keep that screen open — the pairing code stays valid only while it is open</string>
+    <string name="notification_adb_pairing_not_found_title">Wireless debugging not found</string>
+    <string name="notification_adb_pairing_not_found_text">Make sure Wireless debugging is enabled and the phone is on the same network, then try again</string>
+    <string name="notification_adb_pairing_search_error_title">Wireless debugging search failed</string>
+    <string name="notification_adb_pairing_expired_title">Pairing session expired</string>
+    <string name="notification_adb_pairing_expired_text">The pairing screen was closed or the pairing code changed. Searching again — open the pairing code screen again and keep it open.</string>
+    <string name="notification_adb_pairing_stop">Stop</string>
+    <string name="notification_adb_pairing_service_found_title">Wireless debugging found</string>
+    <string name="notification_adb_pairing_service_found_text">Keep the pairing code screen open, pull down this notification and enter the 6-digit code shown on the device</string>
+    <string name="notification_adb_pairing_input_action">Enter pair code</string>
+    <string name="notification_adb_pairing_input_hint">6-digit code</string>
+    <string name="notification_adb_pairing_working_title">Pairing…</string>
+    <string name="notification_adb_pairing_working_text">Please wait a moment</string>
+    <string name="notification_adb_pairing_success_title">Pairing successful</string>
+    <string name="notification_adb_pairing_success_text">The device now trusts this app — tap Connect in the app</string>
+    <string name="notification_adb_pairing_success_connected_text">Paired and connected ✓</string>
+    <string name="notification_adb_pairing_failed_title">Pairing failed</string>
+    <string name="notification_adb_pairing_code_wrong">Wrong pairing code or code expired</string>
+    <string name="notification_adb_pairing_no_permission">Enable notification permission for this app in System Settings, then try again</string>
+    <string name="log_adb_key_not_ready">Key not initialized — select the authorization method first</string>
+    <string name="rootflow_log_title">Run log</string>
+    <string name="rootflow_brief">Brief</string>
+    <string name="rootflow_detail">Detail</string>
+    <string name="rootflow_auto_screen_off">Auto screen off</string>
+    <string name="rootflow_auto_screen_off_summary">Turns the screen off during the run to reduce kernel race probability</string>
+    <string name="rootflow_knox_status">KNOX status</string>
+    <string name="rootflow_knox_loading">Checking... (needs Shizuku)</string>
+    <string name="rootflow_export_log">Export log</string>
+    <string name="rootflow_export_log_placeholder">Save the full run log to the system Downloads folder</string>
+    <string name="rootflow_export">Export</string>
+    <string name="logs_title">Run log</string>
+    <string name="logs_subtitle">Unlock Root flow output</string>
+    <string name="logs_brief">Brief</string>
+    <string name="logs_detail">Detail</string>
+    <string name="logs_export">Export</string>
+    <string name="logs_clear">Clear</string>
+    <string name="logs_empty_brief">(No summary lines yet)</string>
+    <string name="logs_empty">(Logs will appear here. Tap "Start Root" to begin)</string>
+    <string name="about_screen_title">About</string>
+    <string name="about_screen_subtitle">RootMyS24 · unlock root</string>
+    <string name="about_tagline">S24 series unlock root · based on CVE-2026-43499 security research</string>
+    <string name="about_section_device">Device info</string>
+    <string name="about_device_model">Model</string>
+    <string name="about_system_version">System version</string>
+    <string name="about_build_fingerprint">Build fingerprint</string>
+    <string name="about_section_source">Source &amp; license</string>
+    <string name="about_section_faq">FAQ</string>
+    <string name="about_faq_knox_q">Does this trip KNOX?</string>
+    <string name="about_faq_knox_a">No. Unlock-rom privilege without flashing bootloader, KNOX stays untouched.</string>
+    <string name="about_faq_retry_q">Why may it need several tries?</string>
+    <string name="about_faq_retry_a">The exploit raises privileges via kernel memory corruption and succeeds probabilistically; reboot and retry on failure.</string>
+    <string name="about_faq_restart_q">Do I need to re-root after a reboot?</string>
+    <string name="about_faq_restart_a">Yes. The bootloader is locked, so run Unlock Root again after every reboot.</string>
+    <string name="about_faq_devices_q">Which devices are supported?</string>
+    <string name="about_faq_devices_a">S24 series (S24/S24+/S24 Ultra/Z Flip6/Z Fold6) and S25 series on One UI 8.x, plus many S23/S26 and foldable models through the untested payloads. Pick the firmware matching your build in Firmware selection.</string>
+    <string name="about_faq_manager_q">What should I do after root succeeds?</string>
+    <string name="about_faq_manager_a">The app late-loads KernelSU. Install the KernelSU Manager APK, then open it to manage root permissions and modules.</string>
+    <string name="about_faq_untested_q">What does "untested payloads" in settings do?</string>
+    <string name="about_faq_untested_a">It shows 44 payloads for other regions and models that have not been verified on a physical device. Only enable it if you know your firmware matches.</string>
+    <string name="about_faq_adb_q">Do I need wireless debugging?</string>
+    <string name="about_faq_adb_a">No. Shizuku is the default and works over any connection. Wireless debugging is only shown if you enable it in settings, useful when Shizuku is not running.</string>
+    <string name="about_faq_uninstall_q">How do I fully remove root?</string>
+    <string name="about_faq_uninstall_a">Uninstall the KernelSU Manager, delete /data/local/tmp/ksud-s25u-kdp and temp files, then reboot. KNOX is untouched, so nothing else is changed.</string>
+    <string name="about_license_title">Open-source licenses</string>
+    <string name="about_license_close">Close</string>
+    <string name="about_license_load_failed">License text could not be loaded.</string>
+    <string name="about_disclaimer">Disclaimer: This app is for security research and personal learning only. Kernel memory-corruption privilege escalation is inherently uncertain; use at your own risk. Please comply with local laws.</string>
+<!-- RootMyS24 log strings -->
+    <string name="log_starting">Starting RootMyS24</string>
+    <string name="log_payload">Payload: %1$s (BYH7 fix, pipe gate v2)</string>
+    <string name="log_check_shizuku">[1/5] Checking Shizuku...</string>
+    <string name="log_shizuku_not_running">Shizuku is not running. Please start Shizuku first!</string>
+    <string name="log_shizuku_denied">Shizuku permission denied</string>
+    <string name="log_shizuku_ready">Shizuku ready</string>
+    <string name="log_push_payload">[2/5] Pushing payload to /data/local/tmp ...</string>
+    <string name="log_push_done">Push done (%1$s=%2$d B, %3$s=%4$d B)</string>
+    <string name="log_diag">Diagnostic: pipe-max-size=%1$s pipe-user-pages=%2$s</string>
+    <string name="log_diag_version">Diagnostic: /proc/version=%1$s</string>
+    <string name="log_pipe_warn">pipe-max-size (%1$d B) &lt; 128KB (exploit needs 32 slots=128KB), F_SETPIPE_SZ will EPERM</string>
+    <string name="log_power_save_on">⚠ Power saving mode is ON: online cores may drop below 8, futex hash table size will mismatch and the exploit WILL fail. Please turn it off first.</string>
+    <string name="log_cleanup">[2.6/5] Cleaning residual exploit processes and temp files ...</string>
+    <string name="log_cleanup_done">Environment cleanup done (exit=%1$d)</string>
+    <string name="log_trigger">[3/5] Triggering CVE-2026-43499 (LD_PRELOAD /system/bin/true) ...</string>
+    <string name="log_screen_off">Screen turned off (will wake when done; press the power key anytime to check)</string>
+    <string name="log_exploit_timeout">exploit timed out (15 minutes)</string>
+    <string name="log_exploit_incomplete">exploit did not complete (may need several tries / reboot, probabilistic)</string>
+    <string name="log_no_root">exploit finished but no root obtained (marker missing)</string>
+    <string name="log_temp_root">Temporary root obtained!</string>
+    <string name="log_lateload">[4/5] KernelSU late-load (via root daemon) ...</string>
+    <string name="log_screen_off_hint">Hint: keep the screen off during the run (reduces display work, lowers kernel race probability)</string>
+    <string name="log_stage_fail">ksud staging failed (exit=%1$d): %2$s</string>
+    <string name="log_ksud_staged">ksud staged to ksud-s25u-kdp / .ksud-stage</string>
+    <string name="log_lateload_fail">KernelSU late-load failed (exit=%1$d)</string>
+    <string name="log_driver_loaded">KernelSU driver loaded (late-load exit=0)</string>
+    <string name="log_verify">[5/5] Verifying...</string>
+    <string name="log_daemon_check">root daemon: %1$s</string>
+    <string name="log_install_manager">Please install KernelSU Manager (me.weishu.kernelsu v3.2.5, versionCode 32525) to manage root / modules</string>
+    <string name="log_flow_done">Root flow complete — this app is your manager</string>
+    <string name="log_failed">Failed: %1$s</string>
+    <string name="log_woken">Screen woken</string>
+    <string name="log_export_ok_name">Exported to Downloads/%1$s (%2$d chars)</string>
+    <string name="log_export_fail">Export failed: %1$s</string>
+    <string name="log_knox_tripped">Tripped (warranty_bit=1)</string>
+    <string name="log_knox_green">Intact (warranty_bit=0, verifiedbootstate=green)</string>
+    <string name="log_knox_ok">Intact (warranty_bit=0, verifiedbootstate=%1$s)</string>
+    <string name="log_knox_unknown">Unknown (verifiedbootstate=%1$s)</string>
+    <string name="log_knox_needs">Unknown (needs Shizuku)</string>
+<!-- RootMyS24 log extra -->
+    <string name="log_export_entry_fail">Could not create download entry</string>
+    <string name="log_export_write_fail">Could not write to download entry</string>
+    <string name="log_export_ok_path">Exported to %1$s</string>
+    <string name="log_restored">Restored %1$d lines from last session</string>
+    <string name="log_persist_failed">Auto-save log failed: %1$s</string>
+<!-- RootMyS24 donation strings -->
+    <string name="donation_title">Support the project</string>
+    <string name="donation_body">You have successfully rooted %1$d times — thank you! If RootMyS24 has been useful, a small donation would help keep it going. You can scan the QR code on the About page.</string>
+    <string name="donation_go_about">Open About</string>
+    <string name="donation_later">Later</string>
+    <string name="about_section_support">Support</string>
+    <string name="about_support_title">Buy the developer a drink</string>
+    <string name="about_support_body">If this tool has helped you, a small donation keeps it going. Thank you!</string>
+    <string name="about_support_qr_hint">Scan with Alipay or WeChat Pay</string>
+    <string name="donate_screen_title">Support the project</string>
+    <string name="donate_back">Back</string>
+    <string name="donate_body_long">Thank you for considering a donation! Scan the QR code below with Alipay or WeChat Pay. Every bit helps keep this project alive and maintained.</string>
+    <string name="donate_thanks">Thanks for your support 🐢</string>
+    <string name="wiki_screen_title">Must-read guide</string>
+    <string name="wiki_subtitle">Two minutes now prevents a brick later</string>
+    <string name="wiki_temp_title">Temporary root — the bootloader stays locked</string>
+    <string name="wiki_temp_body">This tool does not unlock the bootloader and does not trip KNOX. Root is gained through a kernel vulnerability, so the warranty bit stays green, the data partition is untouched and nothing has to be flashed.</string>
+    <string name="wiki_reboot_title">A reboot removes root</string>
+    <string name="wiki_reboot_body">Root exists only in memory. Restart the phone and it boots normally, unrooted, with nothing left behind in the system partition.</string>
+    <string name="wiki_warn_title">Warnings</string>
+    <string name="wiki_warn_body">⚠ Never use KernelSU\'s permanent install (\"Install to system\" / LKM), and never flash a patched boot image. A permanent KernelSU install on a locked bootloader can brick the phone on the next reboot — the temporary grant from this tool is already enough to run root modules.\n⚠ Do not reboot while the root flow is running.\n⚠ Keep the battery above 30 percent and switch off power saving before you start.</string>
+    <string name="wiki_steps_title">How to use</string>
+    <string name="wiki_steps_body">1. Enable Wireless debugging in Developer options and authorize this app (or install Shizuku).\n2. Choose the firmware that matches your phone.\n3. Tap Start root and wait — it takes about 1–3 minutes.\n4. Install KernelSU Manager and grant root to the apps you need.\n5. Reboot whenever you want root gone.</string>
+    <string name="wiki_footer">Temporary root is fully reversible: a restart returns the phone to its original state.</string>
+    <string name="onboarding_wiki_agree">I have read and understood</string>
+    <string name="onboarding_notif_title">Allow notifications</string>
+    <string name="onboarding_notif_body">The root flow turns the screen off on purpose, to avoid kernel races. Notifications report success or failure even while the screen is off or the app is in the background.</string>
+    <string name="onboarding_notif_grant">Allow notifications</string>
+    <string name="onboarding_notif_skip">Not now</string>
+    <string name="onboarding_log_title">Share run logs?</string>
+    <string name="onboarding_log_body">Run logs contain the phone model, the firmware version and the exploit stages — no personal data. They are used to fix failures on new firmware. You can change this any time in Settings.</string>
+    <string name="onboarding_finish">Start using RootMyS24</string>
+    <string name="log_sharing_always">Always share</string>
+    <string name="log_sharing_always_desc">Upload automatically after every run</string>
+    <string name="log_sharing_manual">Ask me each time</string>
+    <string name="log_sharing_manual_desc">Show a prompt when a run finishes</string>
+    <string name="log_sharing_never">Never share</string>
+    <string name="log_sharing_never_desc">Keep logs on this device only</string>
+    <string name="settings_section_privacy">Privacy</string>
+    <string name="settings_log_sharing">Share run logs</string>
+    <string name="settings_log_sharing_summary">Used to diagnose failures on new firmware. Change it whenever you like.</string>
+    <string name="about_section_guide">Guide</string>
+    <string name="about_view_wiki">Must-read guide</string>
+    <string name="about_view_wiki_summary">Temporary root, warnings and how to use</string>
+    <string name="logs_upload">Upload</string>
+    <string name="log_upload_ok">Log uploaded — thank you!</string>
+    <string name="log_upload_fail">Upload failed: %1$s</string>
+    <string name="log_upload_off">Log sharing is off. Turn it on in Settings → Privacy.</string>
+    <string name="log_upload_not_configured">Upload endpoint is not configured yet.</string>
+    <string name="log_upload_prompt_title">Share this run\'s log?</string>
+    <string name="log_upload_prompt_body">The log helps diagnose failures on your firmware. It holds the phone model, firmware version and exploit stages — no personal data.</string>
+    <string name="log_upload_skip">Not this time</string>
+    <string name="settings_section_debug">Debug</string>
+    <string name="settings_debug_test_db">Test log server connection</string>
+    <string name="settings_debug_install_id">Install ID</string>
+    <string name="settings_debug_rerun_onboarding">Show the first-run guide again</string>
+    <string name="settings_debug_off">Turn off debug mode</string>
+    <string name="settings_debug_on">Debug mode enabled</string>
+    <string name="settings_debug_taps_left">%1$d more taps to enable debug mode</string>
+    <string name="log_test_ok">Log server reachable</string>
+    <string name="settings_debug_testing">Testing…</string>
+    <string name="rootflow_build_mismatch_title">Payload does not match your firmware</string>
+    <string name="rootflow_build_mismatch_body">The selected payload covers build %1$s, but this phone is on %2$s. Payloads are calibrated per kernel build, so a mismatch usually fails at the very first step of the exploit chain. Continue anyway?</string>
+    <string name="rootflow_build_mismatch_continue">Continue anyway</string>
+    <string name="rootflow_build_mismatch_cancel">Cancel</string>
+    <string name="rootflow_shizuku_lost_title">Shizuku is gone</string>
+    <string name="rootflow_shizuku_lost_body">Shizuku was stopped — the system often reclaims it after the screen turns off. You can restart Shizuku, or switch to this app\'s own Wireless debugging channel, which does not depend on Shizuku.</string>
+    <string name="rootflow_shizuku_lost_switch">Use Wireless debugging</string>
+    <string name="rootflow_shizuku_lost_later">Later</string>
+    <string name="log_shizuku_lost_hint">Shizuku is no longer running (often reclaimed after screen-off). Restart it, or switch to Wireless debugging in the home screen\'s authorization card.</string>
+    <string name="log_error_unknown">Unknown error (see the log for details)</string>
+    <string name="log_error_internal">Internal error - please try again; if it keeps happening, share the log</string>
+    <string name="log_device_info_failed">Could not read device info: %1$s (continuing)</string>
+    <string name="settings_section_feedback">Feedback</string>
+    <string name="settings_feedback">Report a problem</string>
+    <string name="settings_feedback_summary">Sends your model, firmware and log together so it can be pinpointed</string>
+    <string name="feedback_title">Report a problem</string>
+    <string name="feedback_subtitle">Pick what happened - the details below go with it</string>
+    <string name="feedback_kind_label">What happened</string>
+    <string name="feedback_kind_never_root">It never reaches root</string>
+    <string name="feedback_kind_stuck">It hangs or times out at some step</string>
+    <string name="feedback_kind_after_root">Root worked, but modules or features do not</string>
+    <string name="feedback_kind_ui">Interface or translation problem</string>
+    <string name="feedback_kind_other">Something else</string>
+    <string name="feedback_note_label">Anything to add</string>
+    <string name="feedback_note_hint">Optional</string>
+    <string name="feedback_info_label">Sent along with your report</string>
+    <string name="feedback_attach_log">Attach the run log</string>
+    <string name="feedback_attach_log_summary">Model, firmware and exploit stages - no personal data</string>
+    <string name="feedback_submit">Send report</string>
+    <string name="feedback_ok">Report sent - thank you!</string>
+    <string name="feedback_fail">Could not send: %1$s</string>
+    <string name="rootflow_series_hint">Works across the whole S24 series (S9210 / S9260 / S9280): any model with the same build. China and overseas builds are not interchangeable, but Hong Kong/Taiwan and Europe/US builds can be used interchangeably.</string>
+    <string name="update_new_title">Version %1$s available</string>
+    <string name="update_new_body">Installed %1$s (build %2$d), latest %3$s (build %4$d).</string>
+    <string name="update_new_source">Download source: %1$s</string>
+    <string name="update_download_install">Download and install</string>
+    <string name="update_later">Later</string>
+    <string name="update_latest">Already up to date (%1$s)</string>
+    <string name="update_check_failed">Update check failed: %1$s</string>
+    <string name="update_downloading">Downloading - you will be asked to install when it finishes</string>
+</resources>

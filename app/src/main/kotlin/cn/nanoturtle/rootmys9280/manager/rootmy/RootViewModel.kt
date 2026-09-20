@@ -1,0 +1,1226 @@
+package cn.nanoturtle.rootmys9280.manager.rootmy
+
+import android.app.Application
+import android.content.ContentValues
+import android.os.Build
+import android.os.Environment
+import android.os.SystemClock
+import android.provider.MediaStore
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import cn.nanoturtle.rootmys9280.manager.R
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import android.util.Log
+import java.io.File
+import java.io.FileOutputStream
+import java.io.OutputStreamWriter
+
+/**
+ * 根流程 ViewModel：
+ * 1. 检查/申请 Shizuku 权限
+ * 2. 把 assets 里的载荷推到 /data/local/tmp
+ * 3. LD_PRELOAD 触发 CVE-2026-43499
+ * 4. 等待 root 标记
+ * 5. KernelSU late-load
+ *
+ * 目标：SM-S24 系列（S9210/S9260/S9280）+ 国行 Z Fold6
+ *  - 国行：DZF2（覆盖 DZE2–DZG1，载荷 cve-2026-43499）/ BYH7（One UI 7，载荷 cve-2026-43499-byh7）
+ *  - 国行 Z Fold6：与 S24 同 GKI 构建号，已验证共用 DZF2 载荷（cve-2026-43499）
+ *  - 港版/台版：同构建号共用载荷——DZE2（范围 DZE2–DZG1，载荷 cve-2026-43499-dze2）/ CZA1（One UI 8.0）
+ *  - DZG1 已禁用：DZG1 载荷真机早期无声崩溃，且与 DZF2 同构建号，直接走 DZF2 载荷
+ */
+class RootViewModel(app: Application) : AndroidViewModel(app) {
+    private val app: Application = app
+
+    /**
+     * 崩溃恢复日志：exploit 可能在内核层面触发 panic/重启（OneUI7 测试曾出现
+     * "获得 root 后手机马上自动重启"），内存日志随之丢失。每条日志实时追加到
+     * 本文件（fsync 落盘），App 重启后从文件恢复，导出/排查不再丢日志。
+     */
+    private val persistFile: File by lazy { File(app.filesDir, "rootflow.log") }
+
+    /** 机型/固件标识（如 SM-S9280 或 S9280ZCS6DZF2），供导出文件名使用；持久化以便崩溃后仍可用。 */
+    private var deviceBuildTag: String
+        get() = app.getSharedPreferences(PREFS_SETTINGS, android.content.Context.MODE_PRIVATE)
+            .getString(KEY_DEVICE_BUILD_TAG, null) ?: "unknown"
+        set(value) {
+            app.getSharedPreferences(PREFS_SETTINGS, android.content.Context.MODE_PRIVATE)
+                .edit().putString(KEY_DEVICE_BUILD_TAG, value).apply()
+        }
+
+    /** 目标系统版本（决定使用哪份 exploit 载荷）。按地区分组：国行 / 港版台版。 */
+    enum class FirmwareVersion(
+        val assetName: String,
+        /** 系统版本（如 One UI 8.5） */
+        val label: String,
+        /** 适配机型（如 SM-S9280 国行） */
+        val device: String,
+        /** 适配系统范围（如 DZE2–DZG1） */
+        val range: String,
+        val region: Region,
+        /** KernelSU 驱动资产名（按内核系列选择） */
+        val ksud: String,
+        /** 是否经实测验证（false=需在设置里启用「未经测试的载荷」才显示） */
+        val tested: Boolean = true,
+        val enabled: Boolean = true,
+    ) {
+
+        // ownroot: единственный таргет — iQOO Neo 10 Global (I2405)
+        // assetName/ksud — информационные; реальный флоу стейджит весь kit/ (Neo10RootFlow)
+        NEO10(
+            "kit/cheese",
+            "OriginOS 5",
+            "iQOO Neo 10 Global (I2405)",
+            "6.1.124-android14-11",
+            Region.GLOBAL,
+            "kit/libksud.orig",
+        )
+        ;
+
+        /**
+         * 条目覆盖的构建码（4 位，如 DZE2 / DZG1 / CZA1）。
+         *
+         * 载荷是按**内核构建**定标的：同一构建号的 S24 全系（S9210/S9260/S9280，
+         * 含港台与欧美外版）通用——外版之间可以互串；跨构建号则不成立。
+         * 因此这里从资产名里的 PDA 或适配范围里抽出构建码，用于启动前判断
+         * 「用户选的载荷是否覆盖当前固件」，避免拿另一个构建的载荷空跑几百次。
+         *
+         * 正则要求构建码前后都不是字母数字，避免把 "Z Fold6" 里的 OLD6 之类当构建码。
+         */
+        private val coveredBuildCodes: List<String>
+            get() {
+                val source = (assetName + " " + range).uppercase()
+                return Regex("(?<![A-Z0-9])[A-Z]{3}\\d(?![0-9A-Z])")
+                    .findAll(source)
+                    .map { it.value }
+                    .toList()
+            }
+
+        /**
+         * 当前固件的构建码是否落在该条目覆盖范围内。
+         *
+         * 解析不出构建码时返回 true（宁可放过也不误报）——判据不足就不打扰用户。
+         * 范围内的两个端点按字典序比较即可：DZE2 < DZF1 < DZF2 < DZG1。
+         */
+        fun coversBuild(deviceBuildTag: String): Boolean {
+            val dev = deviceBuildTag.takeLast(4).uppercase()
+            if (dev.length < 4 || !dev.matches(Regex("[A-Z]{3}\\d"))) return true
+            val codes = coveredBuildCodes
+            return when (codes.size) {
+                0 -> true
+                1 -> codes[0] == dev
+                else -> dev in minOf(codes.first(), codes.last())..maxOf(codes.first(), codes.last())
+            }
+        }
+
+        /** 供不匹配提示展示：这个条目实际覆盖的构建描述。 */
+        val coveredLabel: String
+            get() = coveredBuildCodes.joinToString(" / ").ifEmpty { range }
+
+        /** 机型系列（固件选择页筛选用）：从机型字符串识别 S23/S24/S25/S26/折叠屏/心系天下 */
+        val series: Series
+            get() =
+                when {
+                    "Z Flip" in device || "Z Fold" in device || device.startsWith("SM-F") -> Series.FOLD
+                    "心系天下" in device || device.startsWith("W9") -> Series.W
+                    "Neo 10" in device || "I2405" in device -> Series.NEO
+                    "S91" in device -> Series.S23
+                    "S92" in device -> Series.S24
+                    "S93" in device -> Series.S25
+                    "S94" in device -> Series.S26
+                    else -> Series.S24
+                }
+    }
+
+    /** 地区分组：国行 / 港版台版（同构建号共用载荷） */
+    enum class Region(val label: String) {
+        CHINA("国行"),
+        HONGKONG_TAIWAN("港版/台版"),
+        GLOBAL("Global"),
+    }
+
+    /** 机型系列（固件选择页筛选用） */
+    enum class Series(val label: String) {
+        S23("S23"),
+        S24("S24"),
+        S25("S25"),
+        S26("S26"),
+        FOLD("折叠屏"),
+        W("心系天下"),
+        NEO("Neo 10"),
+    }
+
+    /** 授权方式：Shizuku（需装 Shizuku App）或无线调试（Android 11+ 直连） */
+    enum class AuthMethod { SHIZUKU, ADB_WIRELESS }
+
+    /** 一条日志（stage=所属阶段 0=阶段外, summary=是否为总结性标题行） */
+    data class LogLine(val stage: Int, val text: String, val summary: Boolean = false)
+
+    data class UiState(
+        /** 完整日志（每行一条，跨 stage 累积，不再被新输出覆盖） */
+        val logLines: List<LogLine> = emptyList(),
+        /** 当前执行到的阶段（1..5，0=未开始） */
+        val currentStage: Int = 0,
+        val busy: Boolean = false,
+        val rooted: Boolean = false,
+        /** KSU 驱动是否已加载（由 refreshKsuStatus 检测，重启后仍准确） */
+        val ksuLoaded: Boolean = false,
+        /** KNOX 状态展示文案（由 refreshKnox 填充） */
+        val knoxState: String = "",
+    )
+
+    private val _state = MutableStateFlow(UiState())
+    val state: StateFlow<UiState> = _state
+
+    /** 一次性事件：达到捐赠里程碑时发射（携带当前成功次数）。 */
+    private val _donationEvent = MutableSharedFlow<Int>(extraBufferCapacity = 1)
+    val donationEvent: SharedFlow<Int> = _donationEvent
+
+    private val donationManager = DonationManager(app)
+
+    /** exploit 进程的原始输出累积缓冲（跨轮询保留，用于计算增量） */
+    private val captured = StringBuilder()
+
+    /** 本轮运行在 logLines 里的起始下标（-1 表示未开始过，此时上报退化为整段）。 */
+    private var runStartIndex = -1
+
+    /**
+     * 本轮运行编号，形如 `<机器标识前 8 位>-<起始毫秒>`。
+     *
+     * 每次运行写进日志一行（`RUN-ID: …`），服务端拿它做精确去重：
+     * 同一轮无论被自动发送还是被手动重复上传，编号都一样，直接判重即可；
+     * 也就不必再靠"抹掉数字再哈希"这种启发式（那种做法理论上能被构造碰撞）。
+     * 前缀带机器标识，便于人肉定位；毫秒后缀保证同一台机器多次运行互不相同。
+     */
+    private var currentRunId = ""
+    /** 未以换行结尾的半行（下次追加时续上） */
+    private var pendingPartial = ""
+    /** 当前阶段（由 [n/5] 标题行驱动） */
+    private var currentStage = 0
+
+    private val payloadName: String get() = firmwareVersion.assetName
+    private val rootHelperName = "cve-2026-43499-root"
+    /** KernelSU 内核驱动：按所选固件的内核系列选择（5.15/6.1/6.6/6.12 各对应一个资产） */
+    private val ksudName: String get() = firmwareVersion.ksud
+    private val PREFS_SETTINGS = "settings"
+    private val PREFS_FIRMWARE = "firmware_version"
+    private val KEY_AUTH_METHOD = "auth_method"
+
+    /** 实验性功能：无线调试授权（默认关闭；设置页开启后主页才显示相关控件） */
+    private val KEY_ADB_WIRELESS_ENABLED = "adb_wireless_enabled"
+
+    /** 未经测试的载荷（RootMyGalaxy 移植，未实测）：默认关闭，需设置页手动启用 */
+    private val KEY_UNTESTED_PAYLOADS_ENABLED = "untested_payloads_enabled"
+
+    /** 当前 shell 执行器（Shizuku 或无线调试 adb），全部命令经由此执行。 */
+    var shellExecutor: ShellExecutor = ShizukuController
+        private set
+
+    private val _adbWirelessEnabled = MutableStateFlow(false)
+    /** 无线调试授权是否启用（设置页开关；主页订阅此状态决定是否显示无线调试控件） */
+    val adbWirelessEnabled: StateFlow<Boolean> = _adbWirelessEnabled
+
+    private val _untestedPayloadsEnabled = MutableStateFlow(false)
+    /** 未经测试的载荷是否启用（设置页开关；固件选择页据此显示 untested 条目） */
+    val untestedPayloadsEnabled: StateFlow<Boolean> = _untestedPayloadsEnabled
+
+    /**
+     * 所选载荷与当前固件构建不符时的确认提示（非 null 即应弹窗）。
+     *
+     * 载荷按内核构建定标，跨构建号套用会在漏洞链第一步就失败；与其让用户空跑，
+     * 不如先问一句——但仍允许继续（用户可能已知情，或我们解析不出构建码）。
+     */
+    private val _buildMismatch = MutableStateFlow<String?>(null)
+    val buildMismatch: StateFlow<String?> = _buildMismatch
+
+    /** Root 过程中检测到 Shizuku 消失（例如熄屏后被系统回收）。 */
+    private val _shizukuLost = MutableStateFlow(false)
+    val shizukuLost: StateFlow<Boolean> = _shizukuLost
+
+    /** 用户看过构建不匹配提示，取消本次启动。 */
+    fun dismissBuildMismatch() {
+        _buildMismatch.value = null
+    }
+
+    /** 用户选择「仍然继续」：记下这次选择后照常启动。 */
+    fun confirmStartAnyway() {
+        _buildMismatch.value = null
+        startInternal(force = true)
+    }
+
+    fun dismissShizukuLost() {
+        _shizukuLost.value = false
+    }
+
+    /**
+     * 用户选择改用无线调试直连：打开实验开关、切授权方式。
+     * 这条通道由本 App 自己维持 ADB 连接，不依赖 Shizuku 进程是否存活。
+     */
+    fun switchToAdbWireless() {
+        _shizukuLost.value = false
+        setAdbWirelessEnabled(true)
+        setAuthMethod(AuthMethod.ADB_WIRELESS)
+    }
+
+    init {
+        // 无线调试授权：注入 RSA 密钥存储目录（App 私有目录），恢复上次连接状态
+        AdbWirelessController.init(File(app.filesDir, "adb"))
+        // 恢复上次选择的授权方式（Shizuku 或无线调试）
+        val prefs = app.getSharedPreferences(PREFS_SETTINGS, android.content.Context.MODE_PRIVATE)
+        val saved = prefs.getString(KEY_AUTH_METHOD, AuthMethod.SHIZUKU.name)
+        val adbEnabled = prefs.getBoolean(KEY_ADB_WIRELESS_ENABLED, false)
+        _adbWirelessEnabled.value = adbEnabled
+        _untestedPayloadsEnabled.value = prefs.getBoolean(KEY_UNTESTED_PAYLOADS_ENABLED, false)
+        if (adbEnabled && saved == AuthMethod.ADB_WIRELESS.name) {
+            shellExecutor = AdbWirelessController
+        } else if (!adbEnabled && saved == AuthMethod.ADB_WIRELESS.name) {
+            // 无线调试被禁用但上次选了它：强制回退 Shizuku，避免流程引用未启用的后端
+            prefs.edit().putString(KEY_AUTH_METHOD, AuthMethod.SHIZUKU.name).apply()
+        }
+        restorePersistedLog()
+    }
+
+    /** 设置页开关：启用/禁用无线调试授权。禁用时若当前是无线调试则回退 Shizuku 并断开。 */
+    fun setAdbWirelessEnabled(enabled: Boolean) {
+        val prefs = app.getSharedPreferences(PREFS_SETTINGS, android.content.Context.MODE_PRIVATE)
+        prefs.edit().putBoolean(KEY_ADB_WIRELESS_ENABLED, enabled).apply()
+        _adbWirelessEnabled.value = enabled
+        if (!enabled && authMethod == AuthMethod.ADB_WIRELESS) {
+            setAuthMethod(AuthMethod.SHIZUKU)
+            AdbWirelessController.disconnect()
+        }
+    }
+
+    /** 设置页开关：启用/禁用未经测试的载荷。禁用时若当前选中了 untested 条目则回退 DZF2。 */
+    fun setUntestedPayloadsEnabled(enabled: Boolean) {
+        val prefs = app.getSharedPreferences(PREFS_SETTINGS, android.content.Context.MODE_PRIVATE)
+        prefs.edit().putBoolean(KEY_UNTESTED_PAYLOADS_ENABLED, enabled).apply()
+        _untestedPayloadsEnabled.value = enabled
+        if (!enabled && !firmwareVersion.tested) {
+            firmwareVersion = FirmwareVersion.DZF2
+        }
+    }
+
+    /** 当前授权方式（持久化；Compose 可观察） */
+    val authMethod: AuthMethod
+        get() = app.getSharedPreferences(PREFS_SETTINGS, android.content.Context.MODE_PRIVATE)
+            .getString(KEY_AUTH_METHOD, AuthMethod.SHIZUKU.name)
+            .let { runCatching { AuthMethod.valueOf(it ?: AuthMethod.SHIZUKU.name) }.getOrDefault(AuthMethod.SHIZUKU) }
+
+    /** 切换授权方式（立即生效，下次运行使用）。 */
+    fun setAuthMethod(method: AuthMethod) {
+        app.getSharedPreferences(PREFS_SETTINGS, android.content.Context.MODE_PRIVATE)
+            .edit().putString(KEY_AUTH_METHOD, method.name).apply()
+        shellExecutor = when (method) {
+            AuthMethod.SHIZUKU -> ShizukuController
+            AuthMethod.ADB_WIRELESS -> AdbWirelessController
+        }
+    }
+
+    /** 调试选项：自动保存日志到磁盘 */
+    private val KEY_AUTO_SAVE_LOG = "auto_save_log"
+
+    /** 机型/固件标识（供导出文件名使用） */
+    private val KEY_DEVICE_BUILD_TAG = "device_build_tag"
+
+    /** 目标固件版本（持久化；切换后立即生效并触发 Compose 重组） */
+    var firmwareVersion: FirmwareVersion
+        get() = _firmwareVersion.value
+        set(value) {
+            if (_firmwareVersion.value == value) return
+            _firmwareVersion.value = value
+            app.getSharedPreferences(PREFS_SETTINGS, android.content.Context.MODE_PRIVATE)
+                .edit().putString(PREFS_FIRMWARE, value.name).apply()
+        }
+
+    /** Compose 可观察的固件版本状态（普通属性读写 SharedPreferences 不会触发重组） */
+    private val _firmwareVersion: MutableStateFlow<FirmwareVersion> = MutableStateFlow(
+        run {
+            val prefs = app.getSharedPreferences(PREFS_SETTINGS, android.content.Context.MODE_PRIVATE)
+            val name = prefs.getString(PREFS_FIRMWARE, FirmwareVersion.DZF2.name)
+            val restored = FirmwareVersion.entries.firstOrNull { it.name == name } ?: FirmwareVersion.DZF2
+            // 未经测试的载荷开关已关且上次选中了 untested 条目：回退到已实测的 DZF2
+            if (!prefs.getBoolean(KEY_UNTESTED_PAYLOADS_ENABLED, false) && !restored.tested) {
+                prefs.edit().putString(PREFS_FIRMWARE, FirmwareVersion.DZF2.name).apply()
+                FirmwareVersion.DZF2
+            } else {
+                restored
+            }
+        },
+    )
+
+    /** 供独立选择页收集的版本状态流（进程级单例 VM，跨 Activity 同步） */
+    val firmwareVersionState: StateFlow<FirmwareVersion> = _firmwareVersion
+
+    /** 「每次询问」模式下运行结束后的上传提示（true=应弹窗）。 */
+    private val _uploadPrompt = MutableStateFlow(false)
+    val uploadPrompt: StateFlow<Boolean> = _uploadPrompt
+
+    /** 用户已经处理过本次提示（上传或跳过），关掉弹窗。 */
+    fun dismissUploadPrompt() {
+        _uploadPrompt.value = false
+    }
+
+    private val tmpPayload: String get() = "/data/local/tmp/$payloadName"
+    private val tmpRootHelper = "/data/local/tmp/$rootHelperName"
+    private val tmpKsud = "/data/local/tmp/$ksudName"
+
+    fun start() = startInternal(force = false)
+
+    /**
+     * 启动 Root 流程。
+     *
+     * @param force true 表示用户已在「载荷与固件不匹配」提示里选择继续。
+     */
+    private fun startInternal(force: Boolean) {
+        if (_state.value.busy) return
+        // 载荷按内核构建定标：构建不符时先提醒，避免拿另一个构建的载荷空跑几十轮
+        if (!force && !firmwareVersion.coversBuild(deviceBuildTag)) {
+            _buildMismatch.value =
+                app.getString(
+                    R.string.rootflow_build_mismatch_body,
+                    firmwareVersion.coveredLabel,
+                    deviceBuildTag,
+                )
+            return
+        }
+        // 新一轮运行：重置增量缓冲（日志历史保留，可手动清空）
+        captured.clear()
+        pendingPartial = ""
+        currentStage = 0
+        // 记下本轮在日志缓冲里的起点：日志是会话累计的，上报时必须只带本轮，
+        // 否则一条日志里混着好几轮，判成败只能靠猜（曾出现「日志里明明成功了却记成失败」）
+        runStartIndex = _state.value.logLines.size
+        // 每轮开头写一行运行编号，供服务端精确去重（见 currentRunId 注释）
+        currentRunId = newRunId()
+        appendLog("RUN-ID: $currentRunId")
+        _state.value = _state.value.copy(busy = true, rooted = false, currentStage = 0)
+        viewModelScope.launch {
+            try {
+                runRootFlow()
+            } catch (t: Throwable) {
+                appendLog("✗ " + app.getString(R.string.log_failed, friendlyError(t)))
+            } finally {
+                // 唤醒屏幕（如果运行期间自动熄屏了）。shell 通道可能中途断开，
+                // 这里必须兜底：finally 里的异常会覆盖上面的 catch，导致 app 崩溃。
+                if (autoScreenOff) {
+                    runCatching {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            shellExecutor.shell("input keyevent 26")
+                        }
+                    }
+                    appendLog("◆ " + app.getString(R.string.log_woken))
+                }
+                _state.value = _state.value.copy(busy = false)
+                // 一次运行结束后的日志处理：始终提供则直接上报；每次询问则弹一次提示；
+                // 不提供什么都不做。上传失败不影响运行结果，也不会打断 UI。
+                when (OnboardingPrefs.logSharing(app)) {
+                    LogSharing.ALWAYS -> appendLog("◆ " + uploadLog(SOURCE_AUTO))
+                    LogSharing.MANUAL -> {
+                        if (LogUploader.isConfigured(app)) _uploadPrompt.value = true
+                    }
+                    LogSharing.NEVER -> Unit
+                }
+            }
+        }
+    }
+
+    /** 设置页的"运行期间自动熄屏"开关（Shizuku 运行，读 prefs 实时生效） */
+    fun setAutoScreenOff(enabled: Boolean) {
+        app.getSharedPreferences(PREFS_SETTINGS, android.content.Context.MODE_PRIVATE)
+            .edit().putBoolean("auto_screen_off", enabled).apply()
+    }
+
+    val autoScreenOff: Boolean
+        get() = app.getSharedPreferences(PREFS_SETTINGS, android.content.Context.MODE_PRIVATE)
+            .getBoolean("auto_screen_off", true)
+
+    /** 调试选项：自动保存日志到磁盘（崩溃/重启后自动恢复）。默认开启。 */
+    fun setAutoSaveLog(enabled: Boolean) {
+        app.getSharedPreferences(PREFS_SETTINGS, android.content.Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_AUTO_SAVE_LOG, enabled).apply()
+    }
+
+    val autoSaveLog: Boolean
+        get() = app.getSharedPreferences(PREFS_SETTINGS, android.content.Context.MODE_PRIVATE)
+            .getBoolean(KEY_AUTO_SAVE_LOG, true)
+
+    fun clearLog() {
+        captured.clear()
+        pendingPartial = ""
+        currentStage = 0
+        _state.value = _state.value.copy(logLines = emptyList(), currentStage = 0)
+        runCatching { persistFile.delete() }
+    }
+
+    /** 供 UI 追加提示行（如导出结果），不改变阶段 */
+    fun notify(msg: String) {
+        appendLog(msg)
+    }
+
+    /**
+     * 自动申请 shell 权限（按当前授权方式）：
+     * - Shizuku：已授权返回 true；Shizuku 在运行则弹系统授权框；未运行返回 false
+     * - 无线调试：已连接返回 true；未连接返回 false（需先走 connectAdbWireless）
+     * 幂等，可安全地在页面加载时调用。
+     */
+    suspend fun ensureShizukuPermission(): Boolean = when (authMethod) {
+        AuthMethod.SHIZUKU -> {
+            if (ShizukuController.isGranted()) true
+            else if (ShizukuController.pingUntilRunning(timeoutMillis = 2_000)) ShizukuController.requestPermission()
+            else false
+        }
+        AuthMethod.ADB_WIRELESS -> AdbWirelessController.isConnected()
+    }
+
+    /**
+     * 无线调试直连：连接「开发者选项 → 无线调试」显示的 IP:端口（连接端口 39xxx）。
+     * 首次连接设备会弹 RSA 指纹确认框，用户点「允许」后完成认证。
+     * @return null=成功；非 null=失败原因（含需用户点允许等提示）
+     */
+    suspend fun connectAdbWireless(host: String, portText: String): String? {
+        val port = portText.trim().toIntOrNull()
+            ?: return app.getString(R.string.adb_wireless_bad_port)
+        val hostTrimmed = host.trim()
+        if (hostTrimmed.isEmpty()) return app.getString(R.string.adb_wireless_bad_host)
+        val (ok, message) = withContext(Dispatchers.IO) {
+            AdbWirelessController.connect(hostTrimmed, port)
+        }
+        if (!ok) {
+            // 常见失败：连接拒绝（端口不对）、认证超时（忘了点允许）
+            return message
+        }
+        appendLog("✔ " + app.getString(R.string.adb_wireless_connected, hostTrimmed, port))
+        return null
+    }
+
+    /** 断开无线调试连接。 */
+    fun disconnectAdbWireless() {
+        AdbWirelessController.disconnect()
+    }
+
+    /**
+     * 无线调试配对（adb pair）：输入系统「使用配对码配对设备」显示的
+     * IP:配对端口（37xxx）+ 6 位配对码，预授权本机 RSA 公钥。
+     * 配对成功后 connect 39xxx 连接端口免 RSA 指纹弹窗。
+     * @return null=成功；非 null=失败原因
+     */
+    suspend fun pairAdbWireless(host: String, pairPortText: String, pairCode: String): String? {
+        val port = pairPortText.trim().toIntOrNull()
+            ?: return app.getString(R.string.adb_wireless_bad_port)
+        val hostTrimmed = host.trim()
+        if (hostTrimmed.isEmpty()) return app.getString(R.string.adb_wireless_bad_host)
+        val code = pairCode.trim()
+        if (code.isEmpty()) return app.getString(R.string.adb_wireless_bad_pair_code)
+        return withContext(Dispatchers.IO) {
+            AdbWirelessController.pair(hostTrimmed, port, code)
+        }?.also { err ->
+            if (err.contains("pairing code", ignoreCase = true)) {
+                appendLog("✘ " + app.getString(R.string.log_adb_pair_code_wrong))
+            } else {
+                appendLog("✘ " + app.getString(R.string.log_adb_pair_failed, err))
+            }
+        }
+    }
+
+    /**
+     * 通知配对：通过 mDNS 自动发现本机无线调试配对端口，
+     * 弹出通知让用户输入 6 位配对码（RemoteInput），
+     * 配对成功后自动连接。无需手动输入 IP/端口。
+     * 由 AuthCard 的「通知配对」按钮调用。
+     * @return null=已开始；非 null=失败原因（如通知权限未开启）
+     */
+    fun startAdbPairingNotification(context: android.content.Context): String? {
+        if (AdbPairingFlow.isSearching()) return null
+        if (AdbWirelessController.getAdbKey() == null) {
+            return app.getString(R.string.log_adb_key_not_ready)
+        }
+        val err = AdbPairingFlow.startSearch(context)
+        if (err == null) {
+            appendLog("ℹ " + app.getString(R.string.log_adb_pair_notify_started))
+        }
+        return err
+    }
+
+    /**
+     * 读取 KNOX 状态（经 Shizuku 读只读属性，不影响熔断判断）。
+     * 注意：本流程不熔断 KNOX；warranty_bit=0 为完好。
+     */
+    suspend fun refreshKnox() {
+        val bit = runCatching {
+            shellExecutor.capture(
+                arrayOf("/system/bin/sh", "-c", "getprop ro.boot.warranty_bit 2>&1")
+            ).trim()
+        }.getOrDefault("")
+        val vbs = runCatching {
+            shellExecutor.capture(
+                arrayOf("/system/bin/sh", "-c", "getprop ro.boot.verifiedbootstate 2>&1")
+            ).trim()
+        }.getOrDefault("")
+        val text = when {
+            bit == "1" -> app.getString(R.string.log_knox_tripped)
+            bit == "0" && vbs == "green" -> app.getString(R.string.log_knox_green)
+            bit == "0" -> app.getString(R.string.log_knox_ok, vbs.ifBlank { "?" })
+            vbs.isNotBlank() -> app.getString(R.string.log_knox_unknown, vbs)
+            else -> app.getString(R.string.log_knox_needs)
+        }
+        _state.value = _state.value.copy(knoxState = text)
+    }
+
+    /**
+     * 检测 KernelSU 驱动是否已加载（无需 root）：
+     * /proc/modules 列出已加载模块，或 /sys/module/kernelsu 存在即驱动在内核中。
+     * 重启后依然准确，不依赖本次会话是否跑过 root 流程。
+     *
+     * 注意：必须经 Shizuku（shell 权限）检测——app 进程直接读 /proc/modules 会被
+     * SELinux / KSU 隐藏机制拒绝（Permission denied），而 shell 视角能看到 kernelsu。
+     */
+    suspend fun refreshKsuStatus() = withContext(Dispatchers.IO) {
+        val loaded = runCatching {
+            if (shellExecutor.isReady()) {
+                // shell 权限经执行器检测
+                shellExecutor.shell(
+                    "grep -q 'kernelsu' /proc/modules 2>/dev/null || " +
+                        "ls /sys/module/kernelsu >/dev/null 2>&1"
+                ).first == 0
+            } else {
+                // 执行器不可用时的兜底（部分环境 app 可直接读）
+                val p = ProcessBuilder(
+                    "/system/bin/sh", "-c",
+                    "grep -q 'kernelsu' /proc/modules 2>/dev/null || " +
+                        "ls /sys/module/kernelsu >/dev/null 2>&1"
+                ).start()
+                p.waitFor() == 0
+            }
+        }.getOrDefault(false)
+        _state.value = _state.value.copy(ksuLoaded = loaded, rooted = loaded)
+    }
+
+    private suspend fun runRootFlow() = withContext(Dispatchers.IO) {
+        appendLog("◆ " + app.getString(R.string.log_starting))
+        appendLog("◆ " + app.getString(R.string.log_payload, payloadName))
+
+        // 1. 授权检查（按当前授权方式：Shizuku 或无线调试）
+        appendLog(app.getString(R.string.log_check_shizuku))
+        when (authMethod) {
+            AuthMethod.SHIZUKU -> {
+                if (!ShizukuController.pingUntilRunning()) {
+                    // 熄屏后 Shizuku 常被系统回收（或它依附的 ADB 会话被回收），
+                    // 这时给出可执行的出路：改用本 App 自带的无线调试直连
+                    appendLog("ℹ " + app.getString(R.string.log_shizuku_lost_hint))
+                    _shizukuLost.value = true
+                    throw IllegalStateException(app.getString(R.string.log_shizuku_not_running))
+                }
+                if (!ShizukuController.requestPermission()) {
+                    throw IllegalStateException(app.getString(R.string.log_shizuku_denied))
+                }
+                appendLog("✔ " + app.getString(R.string.log_shizuku_ready))
+            }
+            AuthMethod.ADB_WIRELESS -> {
+                if (!AdbWirelessController.isConnected()) {
+                    throw IllegalStateException(app.getString(R.string.log_adb_not_connected))
+                }
+                appendLog("✔ " + app.getString(R.string.log_adb_ready))
+            }
+        }
+
+        // 1.5 机型报告：完整设备/固件/内核信息，写入日志头部（便于崩溃后从日志识别设备）
+        collectDeviceInfo()
+
+
+        // ownroot: kit-флоу делегируется Neo10RootFlow
+        // (cheese → KASLR slide → slidepatch/insmod → активация libksud.orig → САМОКОРОНА)
+        val result = Neo10RootFlow.run(app, shellExecutor) { line -> appendLog(line) }
+        result.fold(
+            onSuccess = {
+                _state.value = _state.value.copy(rooted = true, ksuLoaded = true)
+                appendLog("🎉 " + app.getString(R.string.log_flow_done))
+                notifyRootSuccess()
+            },
+            onFailure = { t -> throw t },
+        )
+
+        // 捐赠里程碑：root 成功累计到 10/25/50/75/100… 时提示一次
+        if (donationManager.recordSuccess()) {
+            _donationEvent.tryEmit(donationManager.successCount)
+        }
+
+    }
+
+    /** 发送 Root 成功通知（熄屏/后台时告知用户；亮屏提示可能被系统省略）。 */
+    @android.annotation.SuppressLint("MissingPermission")  // 运行时已检查 areNotificationsEnabled
+    private fun notifyRootSuccess() {
+        try {
+            if (Build.VERSION.SDK_INT >= 33 &&
+                !NotificationManagerCompat.from(app).areNotificationsEnabled()
+            ) {
+                // Android 13+ 未授权通知：notify() 会被静默丢弃，跳过并在日志提示
+                appendLog("⚠ " + app.getString(R.string.log_notification_no_permission))
+                return
+            }
+            val channelId = "root_success"
+            val manager = app.getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    channelId,
+                    app.getString(R.string.notification_channel_root_success),
+                    NotificationManager.IMPORTANCE_HIGH,
+                ).apply {
+                    setSound(null, null)
+                    setShowBadge(true)
+                }
+            )
+            val contentIntent = PendingIntent.getActivity(
+                app, 0,
+                Intent(app, cn.nanoturtle.rootmys9280.manager.ui.MainActivity::class.java),
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                else PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            val notification: Notification =
+                NotificationCompat.Builder(app, channelId)
+                    .setSmallIcon(android.R.drawable.stat_sys_warning)
+                    .setContentTitle(app.getString(R.string.notification_root_success_title))
+                    .setContentText(app.getString(R.string.notification_root_success_text))
+                    .setContentIntent(contentIntent)
+                    .setAutoCancel(true)
+                    .setCategory(NotificationCompat.CATEGORY_SERVICE)
+                    .build()
+            NotificationManagerCompat.from(app).notify(1001, notification)
+        } catch (t: Throwable) {
+            Log.w("RootViewModel", "notifyRootSuccess failed", t)
+        }
+    }
+
+    private fun extractAsset(name: String): File {
+        val out = File(app.filesDir, name)
+        app.assets.open(name).use { input ->
+            out.outputStream().use { output -> input.copyTo(output) }
+        }
+        return out
+    }
+
+    /**
+     * 收集设备/固件/内核完整信息，写入日志头部（机型报告）。
+     * 崩溃/重启后日志仍可据此识别设备，便于按机型归档与排查。
+     */
+    private suspend fun collectDeviceInfo() {
+        // 采集失败（例如 Shizuku 恰好被回收）不应中断 Root 流程：设备信息是诊断信息，
+        // 不是流程前提。失败时记一行，让日志仍能看出「设备信息缺失」这个事实。
+        try {
+        val props = listOf(
+            "ro.product.model",       // SM-S9280
+            "ro.product.board",       // e3q
+            "ro.build.version.release", // 15
+            "ro.build.version.sdk",   // 35
+            "ro.build.version.security_patch", // 2026-06-01
+            "ro.build.version.incremental", // S9280ZCS6DZF2
+            "ro.build.fingerprint",   // 完整指纹
+            "ro.bootloader",          // S9280ZCS6DZF2
+            "ro.boot.warranty_bit",   // KNOX 熔断状态
+            "ro.boot.verifiedbootstate", // green
+        )
+        val values = mutableMapOf<String, String>()
+        props.forEach { name ->
+            // Shizuku 的 binder 调用可能返回 null（超时/对端回收），Kotlin 的 .trim() 会在这里
+            // 抛 “null object reference”。设备信息只是诊断用，取不到就留空，绝不能让整轮失败。
+            values[name] = runCatching {
+                    shellExecutor.capture(arrayOf("/system/bin/sh", "-c", "getprop $name 2>&1"))
+                }
+                .getOrNull()
+                ?.trim()
+                .orEmpty()
+        }
+        val model = values["ro.product.model"].orEmpty()
+        val board = values["ro.product.board"].orEmpty()
+        val buildInc = values["ro.build.version.incremental"].orEmpty()
+        val release = values["ro.build.version.release"].orEmpty()
+        val patch = values["ro.build.version.security_patch"].orEmpty()
+        val fingerprint = values["ro.build.fingerprint"].orEmpty()
+        val bootloader = values["ro.bootloader"].orEmpty()
+        val warranty = values["ro.boot.warranty_bit"].orEmpty()
+        val vbs = values["ro.boot.verifiedbootstate"].orEmpty()
+
+        appendLog("◆ 设备: ${model.ifBlank { "?" }} (${board.ifBlank { "?" }})")
+        val sysLine = "Android " + release.ifBlank { "?" } +
+            if (patch.isBlank()) "" else " / 安全补丁 $patch"
+        appendLog("◆ 系统: $sysLine")
+        val fwLine = buildInc.ifBlank { "?" } +
+            if (bootloader.isBlank()) "" else " (bootloader $bootloader)"
+        appendLog("◆ 固件: $fwLine")
+        if (fingerprint.isNotBlank()) appendLog("◆ 指纹: $fingerprint")
+        val knox = when {
+            warranty == "1" -> "已熔断 (warranty_bit=1)"
+            warranty == "0" && vbs == "green" -> "完好 (warranty_bit=0, verifiedbootstate=green)"
+            else -> "warranty_bit=${warranty.ifBlank { "?" }}, verifiedbootstate=${vbs.ifBlank { "?" }}"
+        }
+        appendLog("◆ KNOX: $knox")
+
+        // 版本号：便于从导出的日志直接辨认 build
+        val verName = try {
+            app.packageManager.getPackageInfo(app.packageName, 0).versionName.orEmpty()
+        } catch (_: Exception) { "?" }
+        val verCode = try {
+            val pi = app.packageManager.getPackageInfo(app.packageName, 0)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) pi.longVersionCode else pi.versionCode.toLong()
+        } catch (_: Exception) { 0L }
+        appendLog("◆ 版本: RootMyS24 v${verName} (build ${verCode})")
+
+        // 记录机型标识，供导出文件名（rootmys9280-S9280ZCS6DZF2.txt）与日志上报使用。
+        // 必须优先取固件串而不是型号：分析日志时要按「构建」聚合，型号说明不了兼容性
+        // （S24 全系同构建通用），先前取 model 让云端 build_tag 全是 SM-S9280 这类值。
+        val buildTag = listOf(buildInc, bootloader, model)
+            .firstOrNull { it.isNotBlank() && !it.contains("?") }
+        val normalized = buildTag
+            ?.replace(Regex("[^A-Za-z0-9._-]"), "_")
+            ?.take(40)
+            ?: "unknown"
+        deviceBuildTag = normalized
+        } catch (t: Throwable) {
+            appendLog("⚠ " + app.getString(R.string.log_device_info_failed, friendlyError(t)))
+        }
+    }
+
+    private fun copyToTmp(sourceName: String, target: String, mode: String): File {
+        val src = File(app.filesDir, sourceName)
+        shellExecutor.writeFile(target, mode, src.inputStream())
+        return src
+    }
+
+    /** 只返回自上次调用以来新增的输出（累积缓冲在成员里） */
+    private fun drainProcessOutput(process: Process): String {
+        val before = captured.length
+        try {
+            val data = ByteArray(4096)
+            while (process.inputStream.available() > 0) {
+                val n = process.inputStream.read(data)
+                if (n <= 0) break
+                captured.append(String(data, 0, n, Charsets.UTF_8))
+            }
+            while (process.errorStream.available() > 0) {
+                val n = process.errorStream.read(data)
+                if (n <= 0) break
+                captured.append(String(data, 0, n, Charsets.UTF_8))
+            }
+        } catch (_: Throwable) {
+        }
+        return if (captured.length > before) captured.substring(before) else ""
+    }
+
+    private fun publishLog(delta: String) {
+        if (delta.isEmpty()) return
+        appendRawStream(stripAnsi(delta))
+    }
+
+    /** App 自己输出的一整行，立即入列（不做半行缓冲）；[n/5] 标题行驱动阶段切换 */
+    private fun appendLog(line: String) {
+        val clean = stripAnsi(line).trimEnd()
+        if (clean.isEmpty()) return
+        val stage = stageOf(clean)
+        if (stage > 0) currentStage = stage
+        addLines(listOf(LogLine(currentStage, clean, summary = isSummary(clean))))
+        if (stage > 0) {
+            _state.value = _state.value.copy(currentStage = stage)
+        }
+    }
+
+    /** exploit 原始输出流：拆行并合并半行，行属于当前阶段 */
+    private fun appendRawStream(text: String) {
+        if (text.isEmpty()) return
+        val combined = pendingPartial + text
+        val pieces = combined.split("\n")
+        val complete: List<String>
+        if (combined.endsWith("\n")) {
+            complete = pieces.dropLast(1) // 末尾 "" 是拆分产物
+            pendingPartial = ""
+        } else {
+            complete = pieces.dropLast(1)
+            pendingPartial = pieces.last()
+        }
+        if (complete.isEmpty()) return
+        val cleaned = complete.map { stripAnsi(it).trimEnd() }
+        addLines(cleaned.map { LogLine(currentStage, it, summary = isSummary(it)) })
+    }
+
+    private fun addLines(lines: List<LogLine>) {
+        if (lines.isEmpty()) return
+        val newLines = (_state.value.logLines + lines).takeLast(MAX_LOG_LINES)
+        _state.value = _state.value.copy(logLines = newLines)
+        persistLines(lines)
+    }
+
+    /** 解析 "[n/5] 标题" 中的阶段号，非阶段行返回 0 */
+    private fun stageOf(line: String): Int {
+        val m = STAGE_PATTERN.find(line) ?: return 0
+        return m.groupValues[1].toInt()
+    }
+
+    /** 是否总结性标题行（粗略模式只显示这些） */
+    private fun isSummary(line: String): Boolean {
+        val t = line.trim()
+        if (t.isEmpty()) return false
+        if (t.startsWith("✔") || t.startsWith("✗") || t.startsWith("🎉") ||
+            t.startsWith("⚠") || t.startsWith("◆")
+        ) return true
+        if (STAGE_PATTERN.containsMatchIn(t)) return true
+        if (t.startsWith("[+]") || t.startsWith("[-]")) {
+            return SUMMARY_RAW_ANY.any { t.contains(it) }
+        }
+        return SUMMARY_KEYWORDS.any { t.contains(it) }
+    }
+
+    /** 最近一次持久化写入失败原因（null=正常；供恢复/导出时诊断展示） */
+    @Volatile
+    private var persistFailure: String? = null
+
+    /**
+     * 追加日志到持久化文件（App 私有目录，逐条追加 + fsync 落盘）。
+     * 崩溃/重启后由 [restorePersistedLog] 恢复，确保 exploit 触发内核 panic
+     * 时日志不丢（OneUI7 测试曾出现 root 成功后立即重启导致日志丢失）。
+     * 文件超限时保留尾部 [MAX_LOG_LINES] 行（与内存上限一致）。
+     * 写入失败不再静默吞掉：记录 [persistFailure]，恢复/导出时展示诊断。
+     */
+    private fun persistLines(lines: List<LogLine>) {
+        if (lines.isEmpty()) return
+        if (!autoSaveLog) return // 调试选项关闭时不落盘
+        try {
+            persistFile.parentFile?.mkdirs()
+            FileOutputStream(persistFile, true).use { fos ->
+                val writer = OutputStreamWriter(fos, Charsets.UTF_8)
+                lines.forEach { line -> writer.write(line.text); writer.write('\n'.code) }
+                writer.flush()
+                fos.fd.sync() // 落盘，防断电/panic 丢数据
+            }
+            persistFailure = null
+        } catch (t: Throwable) {
+            persistFailure = t.message ?: t.javaClass.simpleName
+        }
+        runCatching { trimPersistFile() }
+    }
+
+    /** 持久化文件只保留尾部 [MAX_LOG_LINES] 行（避免无限增长）。 */
+    private fun trimPersistFile() {
+        if (!persistFile.exists() || persistFile.length() < MAX_PERSIST_BYTES) return
+        val all = persistFile.readLines()
+        if (all.size <= MAX_LOG_LINES) return
+        persistFile.writeText(all.takeLast(MAX_LOG_LINES).joinToString("\n") + "\n")
+    }
+
+    /** App 重启后从持久化文件恢复上次运行的日志（stage 按 [n/5] 重新推导）。 */
+    private fun restorePersistedLog() {
+        runCatching {
+            if (!persistFile.exists()) return
+            val lines = persistFile.readLines().filter { it.isNotBlank() }
+            if (lines.isEmpty()) return
+            var stage = 0
+            val restored = lines.map { text ->
+                val s = stageOf(text)
+                if (s > 0) stage = s
+                LogLine(stage, text, summary = isSummary(text))
+            }
+            // 恢复可见提示：让测试者明确看到"上次日志已自动恢复"（含行数），
+            // 避免误以为 App 重启后日志丢失而只能手动导出。
+            val notes = buildList {
+                val failure = persistFailure
+                if (failure != null) {
+                    add(LogLine(0, "⚠ " + app.getString(R.string.log_persist_failed, failure), summary = true))
+                }
+                add(LogLine(0, "↻ " + app.getString(R.string.log_restored, lines.size), summary = true))
+            }
+            _state.value = _state.value.copy(
+                logLines = (notes + restored).takeLast(MAX_LOG_LINES),
+                currentStage = stage,
+            )
+        }
+    }
+
+    /**
+     * 导出完整日志到系统下载目录（MediaStore，无需权限）。
+     * 文件名按机型/固件命名（如 rootmys9280-S9280ZCS6DZF2.txt），
+     * 便于多设备混测时按机型归档。
+     * @return 结果提示文案
+     */
+    suspend fun dumpLog(): String = withContext(Dispatchers.IO) {
+        runCatching {
+            val content = buildLogText()
+            val displayName = "rootmys9280-$deviceBuildTag.txt"
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, displayName)
+                    put(MediaStore.Downloads.MIME_TYPE, "text/plain")
+                    put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                }
+                val uri = app.contentResolver
+                    .insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    ?: error(app.getString(R.string.log_export_entry_fail))
+                app.contentResolver.openOutputStream(uri)?.use { out ->
+                    out.write(content.toByteArray())
+                    out.flush()
+                    // MediaStore 流底层是 ParcelFileDescriptor，尽量 fsync，
+                    // 避免导出后立刻发生内核 panic/重启时留下空/零填充文件。
+                    runCatching {
+                        (out as? java.io.FileOutputStream)?.fd?.sync()
+                    }
+                } ?: error(app.getString(R.string.log_export_write_fail))
+                app.getString(R.string.log_export_ok_name, displayName, content.length)
+            } else {
+                @Suppress("DEPRECATION")
+                val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                dir.mkdirs()
+                val f = File(dir, displayName)
+                f.writeText(content)
+                app.getString(R.string.log_export_ok_path, f.absolutePath)
+            }
+        }.getOrElse { app.getString(R.string.log_export_fail, it.message) }
+    }
+
+    /** 生成本轮运行编号：机器标识前 8 位 + 起始毫秒（纯 ASCII，服务端好解析）。 */
+    private fun newRunId(): String {
+        val prefix = LogUploader.installId(app).take(8).ifBlank { "unknown" }
+        return "$prefix-${System.currentTimeMillis()}"
+    }
+
+    /**
+     * 给用户看的错误文案。
+     *
+     * 直接把异常 message 抛给用户时，Java 侧空指针会长成
+     * “Attempt to invoke virtual method … on a null object reference” 这种没人看得懂的东西。
+     * 这类内部异常统一换成可读提示（细节仍在日志里），其余照原样显示。
+     */
+    private fun friendlyError(t: Throwable): String {
+        val raw = t.message?.trim().orEmpty()
+        if (raw.isEmpty()) return app.getString(R.string.log_error_unknown)
+        val internal =
+            raw.contains("null object reference", ignoreCase = true) ||
+                raw.contains("Attempt to invoke", ignoreCase = true) ||
+                raw.startsWith("java.") ||
+                raw.startsWith("kotlin.")
+        return if (internal) app.getString(R.string.log_error_internal) else raw
+    }
+
+    private fun stripAnsi(s: String): String =
+        s.replace(ANSI_ESCAPE, "").replace("\r", "")
+
+    /**
+     * 当前这份日志的完整文本（含版本头部）。
+     *
+     * 优先用内存日志；内存为空（刚重启、恢复失败等）时兜底读持久化文件，
+     * 保证"导出/上传"任何时候都能拿到内容。导出与上报共用这一份，
+     * 避免两条路径各拼一次导致内容不一致。
+     */
+    private fun buildLogText(onlyCurrentRun: Boolean = true): String = buildString {
+        val verName = try {
+            app.packageManager.getPackageInfo(app.packageName, 0).versionName.orEmpty()
+        } catch (_: Exception) { "?" }
+        val verCode = try {
+            val pi = app.packageManager.getPackageInfo(app.packageName, 0)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) pi.longVersionCode else pi.versionCode.toLong()
+        } catch (_: Exception) { 0L }
+        appendLine("RootMyS24 v${verName} (build ${verCode})")
+        val all = _state.value.logLines
+        // 只取本轮：从 runStartIndex 切到末尾。起点无效（重启后、清空日志）时退回整段，
+        // 保证任何情况下都有东西可上报。
+        val memLines =
+            if (onlyCurrentRun && runStartIndex in 0 until all.size) {
+                all.subList(runStartIndex, all.size)
+            } else {
+                all
+            }
+        if (memLines.isNotEmpty()) {
+            memLines.forEach { appendLine(it.text) }
+        } else if (persistFile.exists()) {
+            persistFile.readLines().forEach { appendLine(it) }
+        } else {
+            val failure = persistFailure
+            if (failure != null) {
+                appendLine("⚠ " + app.getString(R.string.log_persist_failed, failure))
+            }
+        }
+    }
+
+    /**
+     * 上报当前日志到收集端。
+     *
+     * @return 可直接展示的结果文案（成功/失败/未配置/已关闭）。
+     */
+    /**
+     * 上报日志。
+     *
+     * @param source 上传来源：`auto`=运行结束自动发送、`prompt`=「每次询问」弹窗发送、
+     *   `manual`=日志页手动上传。服务端据此区分「一次运行尝试」与「用户手动提交的诊断」，
+     *   手动提交不计入成功率——否则同一份日志反复点上传就能把成功率刷上去。
+     */
+    suspend fun uploadLog(source: String = SOURCE_AUTO): String = withContext(Dispatchers.IO) {
+        if (OnboardingPrefs.logSharing(app) == LogSharing.NEVER && source != SOURCE_MANUAL) {
+            return@withContext app.getString(R.string.log_upload_off)
+        }
+        if (!LogUploader.isConfigured(app)) {
+            return@withContext app.getString(R.string.log_upload_not_configured)
+        }
+        val manual = source == SOURCE_MANUAL
+        // 手动上传是「把我看到的日志发出去」，所以带整段缓冲；自动/弹窗带本轮，
+        // 这样 outcome 与日志内容说的是同一件事。
+        val log = buildLogText(onlyCurrentRun = !manual)
+        val outcome =
+            if (manual) {
+                "manual"
+            } else {
+                // stage<3 还没进 exploit（授权未就绪、内部错误等），不是漏洞利用失败；
+                // 单独标记后统计与面板都能把它降权处理，不必去日志正文里猜。
+                when {
+                    _state.value.rooted -> "success"
+                    currentStage < 3 -> "not-started@stage${currentStage}"
+                    else -> "failed@stage${currentStage}"
+                }
+            }
+        val error = LogUploader.upload(app, log, effectiveBuildTag, outcome, source)
+        if (error == null) app.getString(R.string.log_upload_ok)
+        else app.getString(R.string.log_upload_fail, error)
+    }
+
+    /**
+     * 无需任何权限的构建串来源（兜底）。
+     *
+     * 正常路径是 collectDeviceInfo() 用 getprop 读 ro.build.version.incremental，
+     * 但那条路要等授权可用才走得到——而用户往往正是「授权不可用」或 stage1 就失败的时候
+     * 才来反馈，于是 buildTag 常年是 unknown（云端 43% 的日志就是这样丢掉了固件信息）。
+     * Build.FINGERPRINT 与 os.version 不需要权限，且里面就带着同一个构建串。
+     */
+    private fun detectedBuildTag(): String {
+        // samsung/e3qzcx/e3q:16/BP4A.251205.006/S9280ZCS6DZH3:user/release-keys
+        val fromFingerprint =
+            Build.FINGERPRINT.split("/").getOrNull(4)?.substringBefore(":")?.trim().orEmpty()
+        if (fromFingerprint.isNotEmpty()) return fromFingerprint
+        // 6.1.145-android14-11-3254743-abS9280ZCS6DZH3
+        val kernel = System.getProperty("os.version").orEmpty()
+        return Regex("ab([A-Z0-9]{8,})").find(kernel)?.groupValues?.get(1).orEmpty()
+    }
+
+    /** 对外（上报/反馈/展示）用的构建串：优先用已采集到的，缺失则即时推断。 */
+    val effectiveBuildTag: String
+        get() =
+            deviceBuildTag.takeIf { it.isNotBlank() && it != "unknown" }
+                ?: detectedBuildTag().ifEmpty { "unknown" }
+
+    /** 反馈里的「问题类型」。这几项覆盖了实际收到的问题，选项化后用户不用组织语言。 */
+    enum class FeedbackKind {
+        NEVER_ROOT,
+        STUCK,
+        AFTER_ROOT,
+        UI,
+        OTHER,
+    }
+
+    /**
+     * 反馈要带的运行环境信息。
+     *
+     * 都用本进程可直接读到的来源（Build / System 属性 / PowerManager），不依赖 shell：
+     * 用户往往正是在授权不可用时来反馈，这时候再去 getprop 只会让反馈本身失败。
+     */
+    fun feedbackInfo(): Map<String, String> {
+        val power =
+            runCatching {
+                    val pm = app.getSystemService(android.content.Context.POWER_SERVICE)
+                        as android.os.PowerManager
+                    if (pm.isPowerSaveMode) "on" else "off"
+                }
+                .getOrDefault("?")
+        return linkedMapOf(
+            "model" to Build.MODEL,
+            "device" to Build.DEVICE,
+            "android" to Build.VERSION.RELEASE,
+            "sdk" to Build.VERSION.SDK_INT.toString(),
+            "firmware" to effectiveBuildTag,
+            "kernel" to (System.getProperty("os.version") ?: "?"),
+            "payload" to firmwareVersion.assetName,
+            "payloadScope" to "${firmwareVersion.device} / ${firmwareVersion.range}",
+            "authMethod" to authMethod.name,
+            "powerSave" to power,
+            "ksu" to if (_state.value.rooted) "loaded" else "not-loaded",
+        )
+    }
+
+    /**
+     * 提交反馈。
+     *
+     * @param includeLog 是否附带当前运行日志（由用户在界面上显式勾选）。
+     * @return 可直接展示的结果文案。
+     */
+    suspend fun submitFeedback(
+        kind: FeedbackKind,
+        note: String,
+        includeLog: Boolean,
+    ): String = withContext(Dispatchers.IO) {
+        if (!LogUploader.isConfigured(app)) {
+            return@withContext app.getString(R.string.log_upload_not_configured)
+        }
+        val error =
+            LogUploader.sendFeedback(
+                context = app,
+                kind = kind.name,
+                note = note.trim(),
+                info = feedbackInfo(),
+                log = if (includeLog) buildLogText() else null,
+            )
+        if (error == null) app.getString(R.string.feedback_ok)
+        else app.getString(R.string.feedback_fail, error)
+    }
+
+    /**
+     * 调试项：测试日志收集端是否可达。服务端只做数据库连通性自检、不写入日志，
+     * 所以可以反复点。
+     *
+     * @return 可直接展示的结果文案。
+     */
+    suspend fun testLogEndpoint(): String = withContext(Dispatchers.IO) {
+        if (!LogUploader.isConfigured(app)) {
+            return@withContext app.getString(R.string.log_upload_not_configured)
+        }
+        val error = LogUploader.ping(app)
+        if (error == null) app.getString(R.string.log_test_ok)
+        else app.getString(R.string.log_upload_fail, error)
+    }
+
+    companion object {
+        /** 上传来源标记，与统计口径对应（manual 不计入成功率）。 */
+        const val SOURCE_AUTO = "auto"
+        const val SOURCE_PROMPT = "prompt"
+        const val SOURCE_MANUAL = "manual"
+
+        const val MAX_LOG_LINES = 4000
+
+        /** 持久化文件大小阈值（超过后裁剪到尾部 MAX_LOG_LINES 行） */
+        private const val MAX_PERSIST_BYTES = 1L shl 20 // 1 MiB
+
+        private val ANSI_ESCAPE = Regex("\u001B\\[[0-9;]*[a-zA-Z]")
+        private val STAGE_PATTERN = Regex("^\\[([1-5])/5]")
+
+        /** [+] / [-] 前缀行里视为总结性的内容 */
+        private val SUMMARY_RAW_ANY = listOf(
+            "attempt=", "preload supervisor", "slide-kaslr-ok",
+            "umh result", "completed", "physrw-summary", "root=1", "root=0",
+        )
+
+        /** 其余行里的总结性关键词 */
+        private val SUMMARY_KEYWORDS = listOf(
+            "slide-kaslr-ok", "root umh result", "exploit completed",
+            "retval=0 socket=1", "done=1 root=1", "uid=2000->0",
+            "late-load", "exit=", "Permission denied", "失败", "成功", "错误",
+        )
+    }
+}
