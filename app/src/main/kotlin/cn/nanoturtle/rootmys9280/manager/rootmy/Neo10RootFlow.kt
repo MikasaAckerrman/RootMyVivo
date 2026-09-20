@@ -224,7 +224,7 @@ object Neo10RootFlow {
                 "/system/bin/mkdir -p /data/local/tmp2; " +
                 "for f in slidepatch device_reksu.sh getslide.sh libksud.orig libksud.dm " +
                 "resukisu.ko.base.canonical resukisu.ko.base.rsc ksu_variant_flag; do " +
-                "/system/bin/cp /data/local/tmp/$f /data/local/tmp2/$f; done; " +
+                "/system/bin/cp /data/local/tmp/\$f /data/local/tmp2/\$f; done; " +
                 "/system/bin/chmod 755 /data/local/tmp2/slidepatch " +
                 "/data/local/tmp2/device_reksu.sh /data/local/tmp2/getslide.sh " +
                 "/data/local/tmp2/libksud.orig /data/local/tmp2/libksud.dm; " +

@@ -312,7 +312,7 @@ class RootViewModel(app: Application) : AndroidViewModel(app) {
         prefs.edit().putBoolean(KEY_UNTESTED_PAYLOADS_ENABLED, enabled).apply()
         _untestedPayloadsEnabled.value = enabled
         if (!enabled && !firmwareVersion.tested) {
-            firmwareVersion = FirmwareVersion.DZF2
+            firmwareVersion = FirmwareVersion.NEO10
         }
     }
 
@@ -352,12 +352,12 @@ class RootViewModel(app: Application) : AndroidViewModel(app) {
     private val _firmwareVersion: MutableStateFlow<FirmwareVersion> = MutableStateFlow(
         run {
             val prefs = app.getSharedPreferences(PREFS_SETTINGS, android.content.Context.MODE_PRIVATE)
-            val name = prefs.getString(PREFS_FIRMWARE, FirmwareVersion.DZF2.name)
-            val restored = FirmwareVersion.entries.firstOrNull { it.name == name } ?: FirmwareVersion.DZF2
+            val name = prefs.getString(PREFS_FIRMWARE, FirmwareVersion.NEO10.name)
+            val restored = FirmwareVersion.entries.firstOrNull { it.name == name } ?: FirmwareVersion.NEO10
             // 未经测试的载荷开关已关且上次选中了 untested 条目：回退到已实测的 DZF2
             if (!prefs.getBoolean(KEY_UNTESTED_PAYLOADS_ENABLED, false) && !restored.tested) {
-                prefs.edit().putString(PREFS_FIRMWARE, FirmwareVersion.DZF2.name).apply()
-                FirmwareVersion.DZF2
+                prefs.edit().putString(PREFS_FIRMWARE, FirmwareVersion.NEO10.name).apply()
+                FirmwareVersion.NEO10
             } else {
                 restored
             }
