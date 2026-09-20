@@ -170,6 +170,24 @@ object Neo10RootFlow {
                     "и нажми кнопку ещё раз"))
             }
 
+            // --- 0.5. ownroot speed: уже рутовано в ЭТОЙ сессии? → мгновенный успех (~1с) ---
+            // Корона живёт в памяти ядра: LKM+демон и корона умирают вместе при ребуте,
+            // значит ksuLoaded+root-канал живы ⟹ корона этой сессии жива, если мы её
+            // выдавали (запоминаем boot_id успешной коронации).
+            if (ksuLoaded(shellExecutor) && haveRoot(shellExecutor)) {
+                val prefs = app.getSharedPreferences("ownroot_state", android.content.Context.MODE_PRIVATE)
+                val savedBoot = prefs.getString("crowned_boot_id", null)
+                val curBoot = runCatching {
+                    shellExecutor.capture(
+                        arrayOf("/system/bin/sh", "-c", "cat /proc/sys/kernel/random/boot_id 2>/dev/null")
+                    ).trim()
+                }.getOrDefault("")
+                if (savedBoot != null && curBoot.isNotEmpty() && savedBoot == curBoot) {
+                    logger.log("✔ Root уже активен в этой сессии (корона выдана ранее) — готово за ~1с")
+                    return@withContext Result.success(Unit)
+                }
+                logger.log("ℹ LKM жив, но корона не подтверждена для этой сессии — продолжаю флоу")
+            }
             // --- 1. Staging кита (ownroot speed-fix: скип по маркеру версии) ---
             val markerOnDevice = runCatching {
                 shellExecutor.capture(
@@ -199,17 +217,15 @@ object Neo10RootFlow {
             }
 
             // --- 2. cheese / root-канал (демон ОБЯЗАТЕЛЕН: все rcmd-стадии идут через него) ---
-            // ownroot fix №2: haveRoot проверяется ПЕРВЫМ (не ksuLoaded) — rcmd-архитектуре
-            // нужен живой демон; LKM-без-демона (краш демона) восстанавливается повторным
-            // cheese (уязвимость в ядре остаётся, insmod позже идемпотентен).
-            // pkill выполняется ТОЛЬКО в ветке пере-эксплойта — не убивает живой канал
+            // ownroot speed: таймаут 300с→75с (окно гонки всё равно ~75с после бута;
+            // дальше эксплойт почти не попадает — честный фейл быстрее ложного ожидания)
             if (haveRoot(shellExecutor)) {
                 logger.log("✔ root-канал уже жив — skip cheese")
             } else {
                 shellExecutor.shell(
                     "pkill -9 cheese 2>/dev/null; rm -f $T/cheese.log $T/rootout; true"
                 )
-                logger.log("◆ cheese: privilege escalation (до 5 мин)")
+                logger.log("◆ cheese: privilege escalation (лимит 75с)")
                 val env = arrayOf(
                     "CHEESE_CPURW=1", "CHEESE_NO_RETRY=1", "CHEESE_DROP_SU=1",
                     "CHEESE_ROOT_DAEMON=1", "CHEESE_CPURW_VERBOSE=1", "CHEESE_PATCH_VR=1",
@@ -219,29 +235,46 @@ object Neo10RootFlow {
                 )
                 val startedAt = SystemClock.elapsedRealtime()
                 // cheese фоновится сам (ROOT_DAEMON), процесс-обёртка завершается
-                shellExecutor.exec(
+                val cheeseProc = shellExecutor.exec(
                     arrayOf("/system/bin/sh", "-c",
                         "cd $T && ./cheese > $T/cheese.log 2>&1"),
                     env,
                 )
                 var rooted = false
-                while (SystemClock.elapsedRealtime() - startedAt < 300_000L) {
+                var failureDiag = ""
+                val tailCmd = arrayOf("/system/bin/sh", "-c", "tail -c 300 $T/cheese.log 2>/dev/null")
+                while (SystemClock.elapsedRealtime() - startedAt < 75_000L) {
                     if (haveRoot(shellExecutor)) { rooted = true; break }
-                    delay(2000)
-                    if (((SystemClock.elapsedRealtime() - startedAt) / 1000L) % 30L == 0L) {
-                        val tail = shellExecutor.capture(
-                            arrayOf("/system/bin/sh", "-c", "tail -c 200 $T/cheese.log 2>/dev/null")
-                        ).trim()
-                        if (tail.isNotEmpty()) logger.log("… $tail")
+                    // ownroot speed-fix: ДВА быстрых фейла вместо слепого ожидания:
+                    // 1) cheese-процесс завершился без рута (NO_RETRY) — обычно «task not
+                    //    found» + «can't get GPU r/w»: физ-KASLR этого бута положил ядро
+                    //    вне GPU-окна скана (0xa3000000-0xae000000). Лечится перезагрузкой.
+                    // 2) маркеры отказа прямо в хвосте лога.
+                    val tail = runCatching { shellExecutor.capture(tailCmd) }.getOrDefault("")
+                    val procDead = runCatching { !cheeseProc.isAlive }.getOrDefault(false)
+                    val failed = tail.contains("task not found") || tail.contains("can't get GPU r/w")
+                    if (failed || (procDead && !rooted)) {
+                        val hit = tail.contains("STEXT HIT") || tail.contains("kbase=")
+                        failureDiag = if (hit)
+                            "эксплойт нашёл ядро, но task-walk не прошёл (гонка). " +
+                            "Перезагрузи и запусти снова."
+                        else
+                            "KASLR этого бута положил ядро вне GPU-сканируемого окна " +
+                            "(STEXT не найден). Перезагрузи телефон и запусти ownroot " +
+                            "в первые минуты — физ-адрес ядра перекатится."
+                        break
                     }
+                    delay(2000)
                 }
                 if (!rooted) {
                     return@withContext Result.failure(IllegalStateException(
-                        "cheese не дал root за 5 мин. Перезагрузи телефон и запусти снова " +
-                        "(окно ≤75с после бута даёт лучшие шансы)."))
+                        failureDiag.ifBlank {
+                            "cheese не дал root за 75с. Перезагрузи телефон и запусти " +
+                            "сразу после загрузки (окно гонки ≤75с)."
+                        }))
                 }
                 // ownroot fix: даём cheese.log дописать leak-строки (slide нужен дальше),
-                // демон форкается раньше, чем лог флешнится
+                // демон форкается раньше, чем лог флешнется
                 delay(2500)
                 logger.log("✔ root-демон жив")
             }
@@ -317,6 +350,17 @@ object Neo10RootFlow {
                     "set-apk: ${crown.trim().takeLast(150)}; dynamic_manager: ${dm.takeLast(80)}"))
             }
             logger.log("✔ корона: ${crownProof.trim().take(120)}")
+            // ownroot speed: запоминаем boot_id сессии коронации → следующий прогон
+            // в этой же сессии завершится мгновенно (скип-проверка в начале флоу)
+            runCatching {
+                val curBoot = shellExecutor.capture(
+                    arrayOf("/system/bin/sh", "-c", "cat /proc/sys/kernel/random/boot_id 2>/dev/null")
+                ).trim()
+                if (curBoot.isNotEmpty()) {
+                    app.getSharedPreferences("ownroot_state", android.content.Context.MODE_PRIVATE)
+                        .edit().putString("crowned_boot_id", curBoot).apply()
+                }
+            }
 
             // --- 7. Верификация ---
             val mods = shellExecutor.capture(
