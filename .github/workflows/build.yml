@@ -2,7 +2,7 @@ name: Build ownroot APK
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, ownroot-app]
     paths-ignore: ['docs/**', '*.md']
   workflow_dispatch:
 
