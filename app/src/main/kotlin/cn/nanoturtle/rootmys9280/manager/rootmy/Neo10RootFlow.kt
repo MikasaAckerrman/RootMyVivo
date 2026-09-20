@@ -257,11 +257,12 @@ object Neo10RootFlow {
             }
 
             // --- 5. Активация (оригинальный libksud: post-fs-data + boot-completed) ---
-            // ownroot fix: все команды с АБСОЛЮТНЫМИ путями — у rootcmd-демона нет PATH,
-            // execvp("chmod") падает с ENOENT (проверено на живом устройстве)
+            // ownroot fix №3: cheese-su НЕ поддерживает -c (execvp литерала → ENOENT,
+            // поймано на живом прогоне: «su id» работает, «su -c id» — нет).
+            // Правильная форма: su /system/bin/sh -c 'строка' — su исполняет sh, sh разбирает
             logger.log("◆ Активация модулей (libksud.orig)")
             val act = rcmd(shellExecutor,
-                "$T/su -c '/system/bin/chmod 755 $T/libksud.orig; " +
+                "$T/su /system/bin/sh -c '/system/bin/chmod 755 $T/libksud.orig; " +
                 "$T/libksud.orig post-fs-data; " +
                 "$T/libksud.orig boot-completed' 2>&1", 90)
             logger.log("активация: ${act.trim().takeLast(300)}")
@@ -270,7 +271,7 @@ object Neo10RootFlow {
             logger.log("◆ Самокорона менеджера")
             val ownApk = app.packageCodePath
             val crown = rcmd(shellExecutor,
-                "$T/su -c '$T/libksud.dm kernel dynamic-manager set-apk $ownApk' 2>&1", 45)
+                "$T/su /system/bin/sh -c '$T/libksud.dm kernel dynamic-manager set-apk $ownApk' 2>&1", 45)
             // ownroot fix: корона ОБЯЗАТЕЛЬНО верифицируется по dmesg (Crowning manager),
             // греппим ИМЕННО наш пакет — в dmesg могут оставаться строки коронаций других менеджеров
             val crownProof = rcmd(shellExecutor,

@@ -85,7 +85,7 @@ class RootViewModel(app: Application) : AndroidViewModel(app) {
         NEO10(
             "kit/cheese",
             "OriginOS 5",
-            "iQOO Neo 10 Global (I2405)",
+            "iQOO Neo 10 (V2425A)",
             "6.1.124-android14-11",
             Region.GLOBAL,
             "kit/libksud.orig",
