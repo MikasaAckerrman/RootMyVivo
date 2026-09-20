@@ -81,6 +81,31 @@ object Neo10RootFlow {
     }
 
     /**
+     * ownroot fix: протухший грант Shizuku. После смены подписи/uid приложения
+     * клиентский checkSelfPermission говорит GRANTED, а сервер отвечает
+     * «Permission Denial: newProcess ... requires permission» (живой прогон
+     * 20.09: staging падал на cheese). Лечение — живая exec-проба: упала →
+     * перезапрашиваем грант (диалог) → пробуем снова.
+     * true = shell-канал подтверждён работой, false = нет шела.
+     */
+    private suspend fun ensureShellWorks(
+        shellExecutor: ShellExecutor,
+        logger: Logger,
+    ): Boolean {
+        val probe = runCatching {
+            shellExecutor.capture(arrayOf("/system/bin/sh", "-c", "id"))
+        }.getOrDefault("")
+        if (probe.contains("uid=")) return true
+        logger.log("⚠ exec-проба провалена (${probe.take(80)}) — перезапрашиваю грант Shizuku")
+        val granted = ShizukuController.requestPermission()
+        if (!granted) return false
+        val probe2 = runCatching {
+            shellExecutor.capture(arrayOf("/system/bin/sh", "-c", "id"))
+        }.getOrDefault("")
+        return probe2.contains("uid=")
+    }
+
+    /**
      * Staging кита на устройство. Возвращает null при ошибке (сообщение уже в лог).
      * ownroot speed-fix: после успешной выкладки пишет маркер $KIT_MARKER —
      * повторные прогоны пропускают 18.7МБ передачи (маркер + контроль присутствия
@@ -137,6 +162,13 @@ object Neo10RootFlow {
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             logger.log("◆ ownroot Neo10 kit flow")
+
+            // --- 0. Живая проверка shell-канала (ownroot fix: протухший грант Shizuku) ---
+            if (!ensureShellWorks(shellExecutor, logger)) {
+                return@withContext Result.failure(IllegalStateException(
+                    "Shell-канал не работает: разреши доступ для ownroot в диалоге Shizuku " +
+                    "и нажми кнопку ещё раз"))
+            }
 
             // --- 1. Staging кита (ownroot speed-fix: скип по маркеру версии) ---
             val markerOnDevice = runCatching {

@@ -427,15 +427,8 @@ class RootViewModel(app: Application) : AndroidViewModel(app) {
                     appendLog("◆ " + app.getString(R.string.log_woken))
                 }
                 _state.value = _state.value.copy(busy = false)
-                // 一次运行结束后的日志处理：始终提供则直接上报；每次询问则弹一次提示；
-                // 不提供什么都不做。上传失败不影响运行结果，也不会打断 UI。
-                when (OnboardingPrefs.logSharing(app)) {
-                    LogSharing.ALWAYS -> appendLog("◆ " + uploadLog(SOURCE_AUTO))
-                    LogSharing.MANUAL -> {
-                        if (LogUploader.isConfigured(app)) _uploadPrompt.value = true
-                    }
-                    LogSharing.NEVER -> Unit
-                }
+                // ownroot: пост-ранная загрузка логов УДАЛЕНА (как у fuckneo10 —
+                // никаких вопросов/отправок после прогона)
             }
         }
     }

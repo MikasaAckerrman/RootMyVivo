@@ -799,26 +799,8 @@ private fun SettingsCard(
         shape = RoundedCornerShape(4.dp),
     ) {
         Column(Modifier.padding(horizontal = 16.dp)) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(stringResource(R.string.rootflow_auto_screen_off), style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        stringResource(R.string.rootflow_auto_screen_off_summary),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Switch(
-                    checked = vm.autoScreenOff,
-                    onCheckedChange = { vm.setAutoScreenOff(it) },
-                )
-            }
-            HorizontalDivider()
+            // ownroot: тумблер «выключать экран» УДАЛЁН (как у fuckneo10 — его нет;
+            // наш kit-флоу его не использует: экран не гасим, races не зависят)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()

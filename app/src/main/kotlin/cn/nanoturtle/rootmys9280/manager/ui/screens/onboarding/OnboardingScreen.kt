@@ -134,17 +134,18 @@ fun OnboardingScreen(onFinished: () -> Unit) {
                         },
                     )
                 }
-                // 第 3 步：日志共享方式。默认「每次询问」，需要用户主动选「始终」才会自动上传。
+                // ownroot: страница выбора лог-шеринга УДАЛЕНА (как у fuckneo10 —
+                // никакого вопроса про отправку логов). Сразу финиш, шеринг = NEVER.
                 else -> {
                     OnboardingPage(
-                        icon = { Icon(Icons.Rounded.CloudUpload, contentDescription = null) },
-                        title = stringResource(R.string.onboarding_log_title),
-                        body = stringResource(R.string.onboarding_log_body),
+                        icon = { Icon(Icons.Rounded.Notifications, contentDescription = null) },
+                        title = stringResource(R.string.onboarding_notif_title),
+                        body = stringResource(R.string.onboarding_notif_body),
                         footer = {
                             Column(Modifier.fillMaxWidth()) {
                                 Button(
                                     onClick = {
-                                        OnboardingPrefs.setLogSharing(context, logSharing)
+                                        OnboardingPrefs.setLogSharing(context, LogSharing.NEVER)
                                         OnboardingPrefs.markDone(context)
                                         onFinished()
                                     },
@@ -154,17 +155,7 @@ fun OnboardingScreen(onFinished: () -> Unit) {
                                 }
                             }
                         },
-                    ) {
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            LogSharing.entries.forEach { mode ->
-                                LogSharingRow(
-                                    mode = mode,
-                                    selected = logSharing == mode,
-                                    onSelect = { logSharing = mode },
-                                )
-                            }
-                        }
-                    }
+                    ) { }
                 }
             }
         }
