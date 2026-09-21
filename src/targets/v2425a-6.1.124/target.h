@@ -5,6 +5,11 @@
 #define BUILD_VARIANT_LABEL "v2425a-6.1.124-ownroot-app-tracefs-kaslr"
 #define APP_PHYS_P0_ORACLE 1
 #define APP_TRACEFS_SLIDE 1
+/* V2425A: kernel loads at phys 0xa7000000 (cheese golden log) with an
+ * independent virtual slide in [0x1000000000, 0x2FFFFFFFFF]. The e3q P0
+ * physical-alias model (0x80080000 + slide) never applies here, and its
+ * fallback UAF panics the kernel (run4.log). Tracefs only; no P0 fallback. */
+#define APP_DISABLE_P0_SLIDE_FALLBACK 1
 #else
 #define BUILD_VARIANT_LABEL "v2425a-6.1.124-ownroot-root-umh"
 #endif

