@@ -402,6 +402,7 @@ int try_cfi_stage(void) {
     configfs_write_once(fd, binwrite_target, payload, sizeof(payload));
   cfi_write_ret = n;
   pr_info("cfi write ret=%zd errno=%d\n", n, errno);
+  stage_marker("fops:cfi_write_done ret=%zd target=%016zx", n, binwrite_target);
   if (n != (ssize_t)sizeof(payload)) {
     cfi_last_step = 1;
     cfi_last_errno = errno;

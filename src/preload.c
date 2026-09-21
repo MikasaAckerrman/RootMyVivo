@@ -230,8 +230,12 @@ __attribute__((constructor)) static void load(void) {
     }
     if (waited == child && WIFEXITED(status) && WEXITSTATUS(status) == 0) {
       pr_success("exploit completed attempt=%d/%d\n", attempt, max_attempts);
+      stage_marker("preload:exploit_completed attempt=%d/%d", attempt,
+                   max_attempts);
       return;
     }
+    stage_marker("preload:attempt_failed attempt=%d/%d status=0x%x", attempt,
+                 max_attempts, status);
 
 #if defined(APP_PAYLOAD) && defined(SLIDE_P0_OFFSET_CANDIDATES)
     if (atomic_load(&app_p0_state->writer_started)) {

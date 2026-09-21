@@ -2204,6 +2204,8 @@ static int slide_child_trigger_write(void) {
   while (!atomic_load(&slide_route_done)) {
     usleep(1000);
   }
+  stage_marker("slide_app:downstream_write_done waiter_ok=%d write_window=%d",
+               atomic_load(&slide_waiter_ok), atomic_load(&slide_stack_write_window));
 #if defined(APP_S928_STABLE_RACE) && APP_S928_STABLE_RACE
 #if defined(APP_S928_ROUTE_DIAG) && APP_S928_ROUTE_DIAG
   int waiter_ok = atomic_load(&slide_waiter_ok);
@@ -2263,6 +2265,8 @@ static int slide_trigger_physical_state_report(int report_status) {
   int status = 0;
   SYSCHK(waitpid(child, &status, 0));
   int ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+  stage_marker("slide_app:child_write_done child=%d status=0x%x ok=%d",
+               child, status, ok);
   if (report_status) {
     pr_info("p0 physical write status=%d ok=%d\n", status, ok);
   }

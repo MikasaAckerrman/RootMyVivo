@@ -509,6 +509,8 @@ static int install_workqueue_umh_root(int fd) {
 
   pr_info("root umh result wake=%d complete=%u retval=%d socket=%d\n",
           wake_ok, complete_done, umh_retval, socket_ok);
+  stage_marker("root:umh_result wake=%d complete=%u retval=%d socket=%d",
+               wake_ok, complete_done, umh_retval, socket_ok);
   result = socket_ok;
 
 cleanup:
