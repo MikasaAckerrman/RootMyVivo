@@ -23,8 +23,46 @@
 #include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
+#include <stdarg.h>
+#include <time.h>
 
 #define BOOTSTRAP_SOCK_PATH "/data/local/tmp/temp_su.sock"
+
+/* Persistent daemon-side log: the exploit side can only observe the
+ * socket; without this file every helper-side failure (bind/exec denial,
+ * mount failure, crash in serve_one) is invisible. One line per event,
+ * opened per call so the log survives a daemon crash mid-write. */
+#define DAEMON_LOG_PATH "/data/local/tmp/cve-root-daemon.log"
+
+static void dlog(const char *fmt, ...) {
+  va_list ap;
+  int fd = open(DAEMON_LOG_PATH, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC,
+                0600);
+  if (fd < 0) {
+    return;
+  }
+  char head[48];
+  struct timespec now;
+  clock_gettime(CLOCK_REALTIME, &now);
+  int n = snprintf(head, sizeof(head), "[%lld.%03ld] ",
+                   (long long)now.tv_sec, (long)(now.tv_nsec / 1000000));
+  if (n > 0) {
+    write(fd, head, (size_t)n);
+  }
+  char buf[512];
+  va_start(ap, fmt);
+  int m = vsnprintf(buf, sizeof(buf), fmt, ap);
+  va_end(ap);
+  if (m < 0) {
+    m = 0;
+  }
+  if ((size_t)m >= sizeof(buf)) {
+    m = (int)sizeof(buf) - 1;
+  }
+  write(fd, buf, (size_t)m);
+  write(fd, "\n", 1);
+  close(fd);
+}
 #define HOLD_READY_SOCKET "cve43499_roothold"
 #define SH_PATH "/system/bin/sh"
 #define KSU_LOADER_PATH "/data/local/tmp/ksud-s25u-kdp"
@@ -853,9 +891,11 @@ static void serve_one(int conn) {
 static int daemon_main(void) {
   signal(SIGPIPE, SIG_IGN);
   set_root_env();
+  dlog("daemon start pid=%d uid=%d euid=%d", getpid(), getuid(), geteuid());
 
   int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
   if (fd < 0) {
+    dlog("daemon socket failed errno=%d", errno);
     return 1;
   }
 
@@ -867,10 +907,13 @@ static int daemon_main(void) {
 
   if (bind(fd, (struct sockaddr *)&sun, sizeof(sun)) != 0 ||
       listen(fd, 16) != 0) {
+    dlog("daemon bind/listen failed path=%s errno=%d", BOOTSTRAP_SOCK_PATH,
+         errno);
     close(fd);
     return 1;
   }
   chmod(BOOTSTRAP_SOCK_PATH, 0666);
+  dlog("daemon listening path=%s", BOOTSTRAP_SOCK_PATH);
 
   if (bootstrap_marker_path[0]) {
     int marker_fd = open(bootstrap_marker_path,
@@ -889,14 +932,17 @@ static int daemon_main(void) {
       continue;
     }
     if (conn < 0) {
+      dlog("daemon accept failed errno=%d", errno);
       sleep(1);
       continue;
     }
+    dlog("daemon accept conn=%d", conn);
 
     pid_t pid = fork();
     if (pid == 0) {
       close(fd);
       serve_one(conn);
+      dlog("daemon serve_one done conn=%d", conn);
       close(conn);
       _exit(0);
     }
@@ -928,9 +974,11 @@ static void load_bootstrap_marker_config(void) {
 
 static int umh_main(int argc, char **argv) {
   if (geteuid() != 0) {
+    dlog("umh rejected euid=%d argc=%d", geteuid(), argc);
     return 126;
   }
   if (argc != 3 && argc != 4) {
+    dlog("umh rejected argc=%d", argc);
     return 124;
   }
   char *end = NULL;
@@ -938,6 +986,7 @@ static int umh_main(int argc, char **argv) {
   unsigned long parsed_uid = strtoul(argv[2], &end, 10);
   if (errno || end == argv[2] || *end || parsed_uid == 0 ||
       parsed_uid > UINT32_MAX) {
+    dlog("umh rejected uid arg argv2=%s", argv[2]);
     return 123;
   }
   allowed_client_uid = (uid_t)parsed_uid;
@@ -949,8 +998,11 @@ static int umh_main(int argc, char **argv) {
   }
   if (setresgid(0, 0, 0) != 0 || setresuid(0, 0, 0) != 0 ||
       getuid() != 0 || geteuid() != 0 || getgid() != 0 || getegid() != 0) {
+    dlog("umh rejected setres uid/gid errno=%d", errno);
     return 125;
   }
+  dlog("umh accepted client_uid=%lu marker=%s", parsed_uid,
+       bootstrap_marker_path[0] ? bootstrap_marker_path : "(none)");
   return daemon_main();
 }
 
@@ -1157,6 +1209,8 @@ static int payload_runner_main(int argc, char **argv) {
 
 int main(int argc, char **argv) {
   signal(SIGPIPE, SIG_IGN);
+  dlog("helper main argc=%d argv1=%s uid=%d", argc,
+       argc >= 2 ? argv[1] : "(none)", getuid());
   if (argc >= 2 && strcmp(argv[1], "--run-payload") == 0) {
     return payload_runner_main(argc, argv);
   }

