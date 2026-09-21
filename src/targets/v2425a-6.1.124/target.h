@@ -91,7 +91,7 @@
 #define P0_ORACLE_GATE_OBJECT_INDEX 1
 #define P0_ORACLE_PROBE_OFFSET 0x1f0000ULL
 #define P0_FINGERPRINT_HEADER \
-  "targets/v2425a-6.1.124-ownroot/p0_fingerprint.h"
+  "targets/v2425a-6.1.124/p0_fingerprint.h"
 #endif
 
 #define KERNELSNITCH_IDENTITY_START 0xffffff8000000000ULL
