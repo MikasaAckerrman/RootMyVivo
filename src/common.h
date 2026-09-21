@@ -20,6 +20,7 @@
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,6 +39,38 @@
 #include <unistd.h>
 
 #include "kernelsnitch/utils.h"
+
+/* Stage marker: append-only durable log with fsync+sync so the exact stage
+ * survives a kernel panic / unexpected reboot.  Used before every risky
+ * kernel-write step. */
+static inline void stage_marker(const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+
+  const char *path = getenv("CVE_STAGE_MARKER");
+  if (!path || !*path) {
+    path = "/data/local/tmp/cve-stage.marker";
+  }
+
+  FILE *f = fopen(path, "a");
+  if (f) {
+    struct timespec ts;
+    (void)clock_gettime(CLOCK_MONOTONIC, &ts);
+    fprintf(f, "[%lld.%09ld] ", (long long)ts.tv_sec, (long)ts.tv_nsec);
+    vfprintf(f, fmt, ap);
+    fprintf(f, "\n");
+    fflush(f);
+    int fd = fileno(f);
+    if (fd >= 0) {
+      fsync(fd);
+    }
+    fclose(f);
+    /* Flush page cache for all files on this mount so the marker is on disk
+     * before the kernel write that may panic. */
+    sync();
+  }
+  va_end(ap);
+}
 
 #define KERNEL_PAGE_SETUP_ATTEMPTS 6
 #if defined(APP_PAYLOAD) && APP_PAYLOAD

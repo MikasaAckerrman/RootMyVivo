@@ -2174,6 +2174,8 @@ static int slide_child_trigger_write(void) {
   }
   pr_info("slide pi stage=cmp-enter waiter_tid=%d\n",
           atomic_load(&slide_waiter_tid));
+  stage_marker("slide_app:futex_loop_enter waiter_tid=%d",
+              atomic_load(&slide_waiter_tid));
 
   long requeue_ret = 0;
   int requeue_errno = 0;
@@ -2197,6 +2199,7 @@ static int slide_child_trigger_write(void) {
     return 0;
   }
   pr_info("slide pi stage=deadlock-accepted\n");
+  stage_marker("slide_app:deadlock_accepted");
   atomic_store(&slide_deadlock_seen, 1);
   while (!atomic_load(&slide_route_done)) {
     usleep(1000);
@@ -2253,8 +2256,10 @@ static int slide_trigger_physical_state_report(int report_status) {
     }
     disable_rseq_for_thread();
     slide_log_child_context();
+    stage_marker("slide_app:child_enter pid=%d", getpid());
     _exit(slide_child_trigger_write() ? 0 : 1);
   }
+  stage_marker("slide_app:parent_forked child=%d", child);
   int status = 0;
   SYSCHK(waitpid(child, &status, 0));
   int ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;

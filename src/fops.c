@@ -396,6 +396,8 @@ int try_cfi_stage(void) {
   pr_info("cfi scratch span=%016zx-%016zx old=zero size=%zu\n",
           binwrite_target, binwrite_target + sizeof(payload) - 1,
           sizeof(payload));
+  stage_marker("fops:cfi_write_enter target=%016zx payload_sz=%zu",
+             binwrite_target, sizeof(payload));
   ssize_t n =
     configfs_write_once(fd, binwrite_target, payload, sizeof(payload));
   cfi_write_ret = n;

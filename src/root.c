@@ -409,6 +409,8 @@ static int install_workqueue_umh_root(int fd) {
 
   if (selinux_old != permissive) {
     selinux_changed = 1;
+    stage_marker("root:selinux_permissive_enter addr=%016zx old=%u",
+                 selinux_addr, selinux_old);
     if (!root_write_global(fd, selinux_addr, &permissive,
                            sizeof(permissive)) ||
         !root_read_global(fd, selinux_addr, &selinux_readback,
@@ -449,6 +451,8 @@ static int install_workqueue_umh_root(int fd) {
     goto cleanup;
   }
 
+  stage_marker("root:umh_publish_enter worklist=%016zx fake_entry=%016zx",
+               worklist, fake_entry);
   int list_next_write = root_write64(fd, worklist, fake_entry);
   uint64_t published_next = 0;
   if (list_next_write ||

