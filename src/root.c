@@ -1,5 +1,6 @@
 #include "common.h"
 
+#include <stddef.h>
 #include <stdlib.h>
 #include <sys/un.h>
 
