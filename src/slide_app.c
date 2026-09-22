@@ -2201,9 +2201,19 @@ static int slide_child_trigger_write(void) {
   pr_info("slide pi stage=deadlock-accepted\n");
   stage_marker("slide_app:deadlock_accepted");
   atomic_store(&slide_deadlock_seen, 1);
-  while (!atomic_load(&slide_route_done)) {
+  /* Bounded wait: if the waiter thread never publishes route completion
+   * (it may be stuck inside the kernel on the corrupted requeue path),
+   * bail out after 60s so the caller still writes the completion log
+   * instead of spinning forever with no diagnostics. */
+  for (int spin_ms = 0; spin_ms < 60000; spin_ms++) {
+    if (atomic_load(&slide_route_done)) {
+      break;
+    }
     usleep(1000);
   }
+  stage_marker("slide_app:route_done_seen=%d waiter_ok=%d",
+               atomic_load(&slide_route_done) != 0,
+               atomic_load(&slide_waiter_ok));
   stage_marker("slide_app:downstream_write_done waiter_ok=%d write_window=%d",
                atomic_load(&slide_waiter_ok), atomic_load(&slide_stack_write_window));
 #if defined(APP_S928_STABLE_RACE) && APP_S928_STABLE_RACE
